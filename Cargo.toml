@@ -1,0 +1,61 @@
+[package]
+name = "wr-simple"
+version = "0.1.0"
+authors = ["Dan Robertson <dar64@cam.ac.uk>"]
+
+[dependencies]
+sdl2 = "*"
+gleam = "*"
+euclid = "*"
+app_units = "*"
+font-loader = "*"
+
+webrender = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
+#need ipc for servo_font?
+#webrender_api = {git = "https://github.com/servo/webrender"}
+webrender_api = {git = "https://github.com/servo/webrender", features = ["ipc"], rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
+
+# for servo gfx (font handling) stuff
+string_cache="0.6"
+num-traits = "*"
+bitflags = "0.7"
+fnv = "1.0"
+fontsan = {git = "https://github.com/servo/fontsan"}
+#gfx_traits = {path = "../gfx_traits"}
+harfbuzz-sys = "0.1"
+heapsize = "0.4"
+heapsize_derive = "0.1"
+ipc-channel = "0.8" #need this?
+lazy_static = "0.2"
+libc = "0.2"
+log = "0.3.5"
+ordered-float = "0.4"
+serde = "1.0"
+smallvec = "0.4"
+time = "0.1.12"
+unicode-bidi = {version = "0.3", features = ["with_serde"]}
+unicode-script = {version = "0.1", features = ["harfbuzz"]}
+xi-unicode = "0.1.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+byteorder = "1.0"
+core-foundation = "0.3"
+core-graphics = "0.8"
+core-text = "5.0"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+freetype = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+servo-fontconfig = "0.2.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+xml5ever = {version = "0.8", features = ["unstable"]}
+
+[target.'cfg(any(target_feature = "sse2", target_feature = "neon"))'.dependencies]
+simd = "0.2.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+dwrote = "0.4"
+truetype = "0.26"
+
