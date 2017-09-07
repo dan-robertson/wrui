@@ -15,12 +15,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::str;
 use std::sync::Arc;
-use std::sync::atomic::{ATOMIC_USIZE_INIT, AtomicUsize, Ordering};
 use font_template::{font_stretch, font_variant_caps, font_weight};
 use text::Shaper;
 use text::glyph::{ByteIndex, GlyphData, GlyphId, GlyphStore};
 use text::shaping::ShaperMethods;
-use time;
 use unicode_script::Script;
 use webrender_api;
 

@@ -1,5 +1,5 @@
 
-use range::{self, EachIndex, Range, RangeIndex};
+use range::{self, RangeIndex};
 
 int_range_index! {
     #[derive(Deserialize, Serialize)]

@@ -59,6 +59,7 @@ pub mod font_weight {
 }
 pub mod font_stretch {
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+    #[allow(non_camel_case_types)]
     pub enum T {
         normal,
         ultra_condensed,
@@ -71,6 +72,7 @@ pub mod font_stretch {
 }
 pub mod font_variant_caps {
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+    #[allow(non_camel_case_types)]
     pub enum T {
         normal,
         small_caps,

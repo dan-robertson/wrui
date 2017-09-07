@@ -28,11 +28,11 @@ extern crate bitflags;
 #[cfg(target_os = "windows")] extern crate truetype;
 
 extern crate euclid;
-extern crate fnv;
+//extern crate fnv;
 
 #[cfg(target_os = "linux")]
 extern crate fontconfig;
-extern crate fontsan;
+//extern crate fontsan;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 extern crate freetype;
 //extern crate gfx_traits;
@@ -43,26 +43,19 @@ extern crate harfbuzz_sys as harfbuzz;
 
 extern crate heapsize;
 #[macro_use] extern crate heapsize_derive;
-extern crate ipc_channel;
+//extern crate ipc_channel;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
-//extern crate msg;
-//extern crate net_traits;
 extern crate ordered_float;
-//extern crate range;
 #[macro_use] extern crate serde;
-//extern crate servo_geometry;
-//extern crate servo_url;
-//#[macro_use] extern crate servo_atoms;
 #[cfg(any(target_feature = "sse2", target_feature = "neon"))]
 extern crate simd;
 extern crate smallvec;
 //extern crate style;
 //extern crate style_traits;
-extern crate time;
 extern crate unicode_bidi;
 extern crate unicode_script;
 extern crate xi_unicode;
@@ -77,18 +70,14 @@ extern crate gleam;
 extern crate sdl2;
 extern crate webrender;
 extern crate webrender_api;
-extern crate font_loader;
 extern crate app_units;
 
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use gleam::gl;
 use webrender_api::*;
-//use std::time;
 use std::boxed::Box;
 use app_units::Au;
-use std::ffi::CString;
-use std::sync::Arc;
 
 //mod servo_font;
 #[macro_use] pub mod range;
