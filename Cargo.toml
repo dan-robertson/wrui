@@ -3,6 +3,10 @@ name = "wr-simple"
 version = "0.1.0"
 authors = ["Dan Robertson <dar64@cam.ac.uk>"]
 
+[lib]
+name = "wrui"
+crate-type = ["cdylib"]
+
 [dependencies]
 gleam = "0.4"
 euclid = "0.15"
