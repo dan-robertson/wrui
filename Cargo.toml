@@ -4,19 +4,19 @@ version = "0.1.0"
 authors = ["Dan Robertson <dar64@cam.ac.uk>"]
 
 [dependencies]
-sdl2 = "*"
-gleam = "*"
-euclid = "*"
-app_units = "*"
+gleam = "0.4"
+euclid = "0.15"
+app_units = "0.5"
+servo-glutin = "0.11"
 
 webrender = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
-#need ipc for servo_font?
+#should (/how do) we use ipc?
 #webrender_api = {git = "https://github.com/servo/webrender"}
 webrender_api = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
 
 # for servo gfx (font handling) stuff
 string_cache="0.6"
-num-traits = "*"
+num-traits = "0.1"
 bitflags = "0.7"
 #fnv = "1.0"
 #fontsan = {git = "https://github.com/servo/fontsan"}

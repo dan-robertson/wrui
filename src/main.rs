@@ -13,7 +13,6 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 extern crate alloc;
 
-
 #[macro_use]
 extern crate bitflags;
 
@@ -67,13 +66,12 @@ extern crate string_cache;
 //other crates
 
 extern crate gleam;
-extern crate sdl2;
+extern crate glutin;
 extern crate webrender;
 extern crate webrender_api;
 extern crate app_units;
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+//use glutin;
 use gleam::gl;
 use webrender_api::*;
 use std::boxed::Box;
@@ -91,40 +89,37 @@ pub mod text;
 
 fn main() {
 
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-
-    let gl_attr = video_subsystem.gl_attr();
-    gl_attr.set_stencil_size(8);
-    gl_attr.set_depth_size(24);
-    gl_attr.set_context_major_version(3);
-    gl_attr.set_context_minor_version(2);
-    gl_attr.set_context_profile(sdl2::video::GLProfile::Core);
-
-    //late swap tearing or vsync
-    video_subsystem.gl_set_swap_interval(-1) || video_subsystem.gl_set_swap_interval(1);
-
-
-    let window = video_subsystem
-        .window("Test", 800, 480)
-        .opengl()
-        .resizable()
+    let window = glutin::WindowBuilder::new()
+        .with_title("Test")
+        .with_multitouch()
+        .with_gl(glutin::GlRequest::GlThenGles {
+            opengl_version:   (3,2),
+            opengles_version: (3,0)
+        })
+        .with_min_dimensions(800,400)
         .build()
         .unwrap();
 
-    let context = window.gl_create_context().unwrap();
-    window.gl_make_current(&context).unwrap();
+    unsafe {
+        window.make_current().ok();
+    }
 
-    let gl = unsafe {
-        gl::GlFns::load_with(|symbol| video_subsystem.gl_get_proc_address(symbol) as *const _)
+    let gl = match gl::GlType::default() {
+        gl::GlType::Gl => unsafe { 
+            gl::GlFns::load_with(|symbol| window.get_proc_address(symbol) as *const _) },
+        gl::GlType::Gles => unsafe {
+            gl::GlesFns::load_with(|symbol| window.get_proc_address(symbol) as *const _) },
     };
+
+    println!("OpenGL version {}", gl.get_string(gl::VERSION));
 
 
     let opts = webrender::RendererOptions {
-        device_pixel_ratio: 1.0,
+        device_pixel_ratio: window.hidpi_factor(),
         resource_override_path: None,
         enable_aa: true,
-        debug: false,
+        debug: true,
+        precache_shaders: true,
         clear_framebuffer: true,
         ..Default::default()
     };
@@ -132,29 +127,36 @@ fn main() {
     let (mut renderer, sender) =
         webrender::Renderer::new(gl, opts).unwrap();
     let api = sender.create_api();
-    
-    let document_id = api.add_document(DeviceUintSize::zero());
+
+    let (width, height) = window.get_inner_size_pixels().unwrap();
+    let size = DeviceUintSize::new(width,height);
+
+    let document_id = api.add_document(size);
+    // remove below?
     api.set_root_pipeline(document_id.clone(), PipelineId(0,0));
 
 //    build_simple(&api, PipelineId(0,0), Epoch(0), 800, 480);
 
-    renderer.set_render_notifier(Box::new(DummyNotifier {}));
+    renderer.set_render_notifier(Box::new(Notifier::new(window.create_window_proxy())));
 
     let mut font_data = test_details(&api).unwrap();
 
-    let mut event_pump = sdl_context.event_pump().unwrap();
     let mut i: u64;
     i = 0;
 
-    'main_loop: loop {
+    'main_loop: for event in window.wait_events() {
 
         let eventstart = std::time::Instant::now();
-        for event in event_pump.poll_iter() {
+        let mut events = Vec::new();
+        events.push(event);
+        for event in window.poll_events() {
+            events.push(event);
+        }
+        for event in events {
             match event {
-                Event::Quit { .. } |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'main_loop;
-                }
+                glutin::Event::Closed |
+                glutin::Event::KeyboardInput(_,_,Some(glutin::VirtualKeyCode::Escape)) 
+                    => break 'main_loop,
                 _ => {}
             }
         }
@@ -162,7 +164,7 @@ fn main() {
         let eventtime = eventstart.elapsed();
         let buildstart = std::time::Instant::now();
 
-        let (width, height) = window.drawable_size();
+        let (width, height) = window.get_inner_size_pixels().unwrap();
         let size = DeviceUintSize::new(width, height);
 
         build_simple(&api, (document_id.clone(), PipelineId(0,0)),
@@ -187,7 +189,7 @@ fn main() {
 
         let rendertime = renderstart.elapsed();
 
-        window.gl_swap_window();
+        window.swap_buffers().ok();
 
 
         i = i + 1;
@@ -333,16 +335,27 @@ fn renderer_next_epoch(renderer : &webrender::Renderer, pipeline : PipelineId) -
     }
 }
 
-struct DummyNotifier {
+struct Notifier {
+    window_proxy: glutin::WindowProxy,
 }
 
-impl RenderNotifier for DummyNotifier {
+impl Notifier {
+    fn new(window_proxy: glutin::WindowProxy) -> Notifier {
+        Notifier {
+            window_proxy: window_proxy,
+        }
+    }
+}
+
+impl RenderNotifier for Notifier {
     fn new_frame_ready(&mut self) {
-        //do nothing
+        #[cfg(not(target_os = "android"))]
+        self.window_proxy.wakeup_event_loop();
     }
     
     fn new_scroll_frame_ready(&mut self, _composite_needed: bool){
-        //do nothing ??
+        #[cfg(not(target_os = "android"))]
+        self.window_proxy.wakeup_event_loop();
     }
 }
 
