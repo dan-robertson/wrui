@@ -67,6 +67,8 @@ pub mod font_stretch {
         condensed,
         semi_condensed,
         semi_expanded,
+        expanded,
+        extra_expanded,
         ultra_expanded,
     }
 }
