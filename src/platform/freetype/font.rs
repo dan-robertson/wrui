@@ -129,24 +129,20 @@ impl FontHandleMethods for FontHandle {
     }
     fn boldness(&self) -> font_weight::T {
         let default_weight = font_weight::T::normal();
-        if unsafe { (*self.face).style_flags & FT_STYLE_FLAG_BOLD as c_long == 0 } {
-            default_weight
-        } else {
-            unsafe {
-                let os2 = FT_Get_Sfnt_Table(self.face, FT_Sfnt_Tag::FT_SFNT_OS2) as *mut TT_OS2;
-                let valid = !os2.is_null() && (*os2).version != 0xffff;
-                if valid {
-                    let weight =(*os2).usWeightClass as i32;
-                    if weight < 10 {
-                        font_weight::T::from_int(weight * 100).unwrap()
-                    } else if weight >= 100 && weight < 1000 {
-                        font_weight::T::from_int(weight / 100 * 100).unwrap()
-                    } else {
-                        default_weight
-                    }
+        unsafe {
+            let os2 = FT_Get_Sfnt_Table(self.face, FT_Sfnt_Tag::FT_SFNT_OS2) as *mut TT_OS2;
+            let valid = !os2.is_null() && (*os2).version != 0xffff;
+            if valid {
+                let weight =(*os2).usWeightClass as i32;
+                if weight < 10 {
+                    font_weight::T::from_int(weight * 100).unwrap()
+                } else if weight >= 100 && weight < 1000 {
+                    font_weight::T::from_int(weight / 100 * 100).unwrap()
                 } else {
                     default_weight
                 }
+            } else {
+                default_weight
             }
         }
     }
