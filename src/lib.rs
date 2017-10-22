@@ -320,6 +320,20 @@ impl DisplayListBuilder {
     }
 }
 
+pub struct ShapedText {
+    run: text::TextRun,
+    range: range::Range<text::glyph::ByteIndex>,
+}
+
+impl ShapedText {
+    fn new(run: text::TextRun, range: range::Range<text::glyph::ByteIndex>) -> ShapedText {
+        ShapedText {
+            run: run,
+            range: range,
+        }
+    }
+}
+
 /*
 #[no_mangle]
 pub extern fn display_list_builder_new() -> *mut DisplayListBuilder {
@@ -479,5 +493,132 @@ pub extern fn display_list_builder_push_text(ptr: *mut DisplayListBuilder,
                           &glyphs, run.font_key,
                           ColorF::new(r,g,b,a),
                           run.actual_pt_size,
+                          None);
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_shape_text(ptr: *mut DisplayListBuilder,
+                                              text: *const c_char) -> *mut ShapedText {
+   let dlb = unsafe {
+        assert!(!ptr.is_null());
+        &mut *ptr
+    };
+    let text = unsafe {
+        assert!(!text.is_null());
+        CStr::from_ptr(text).to_str().unwrap()
+    };
+
+    //first shape text
+    let options = font::ShapingOptions {
+        letter_spacing: None,
+        // word spacing is (fixed amount, % of width of ' ')
+        word_spacing: (Au::new(0), ordered_float::NotNaN::new(1.0).unwrap()),
+        script: unicode_script::Script::Unknown,
+        flags: font::ShapingFlags::empty(),
+    };
+    let run = text::TextRun::new(&mut dlb.font, text.to_string(), &options, unicode_bidi::Level::ltr());
+    let len: text::glyph::ByteIndex =
+        run.glyphs.iter().fold(text::glyph::ByteIndex(0),
+                               |sum, x| sum + x.range.length());
+    let range = range::Range::new(text::glyph::ByteIndex(0),len);
+
+    Box::into_raw(Box::new(ShapedText::new(run, range)))
+}
+
+#[no_mangle]
+pub extern fn shaped_text_free(text: *mut ShapedText) -> () {
+    let _ = unsafe {
+        Box::from_raw(text)
+    };
+}
+
+#[repr(C)]
+pub struct ShapedRunInfo {
+    pub width: f32,
+    pub is_whitespace: uint32_t, // C boolean (i.e. true if non-zero). May add flags to this later
+}
+#[repr(C)]
+pub struct ShapedRunPosition {
+    pub x: f32,
+    pub y: f32,
+}
+#[no_mangle]
+/// given some shaped text determine the widths of each part
+/// (separated by the unicode linebreaking algorithm). The function
+/// returns a pointer to an array of the widths and sets 'len' to the
+/// length of the array. The result should be freed with
+/// 'shaped_text_widths_free'
+pub extern fn shaped_text_get_widths(text: *mut ShapedText, len: *mut size_t) -> *mut ShapedRunInfo {
+    let text = unsafe {
+        assert!(!text.is_null());
+        &*text
+    };
+    let mut result: Vec<ShapedRunInfo> = 
+        text.run.natural_word_slices_in_visual_order(&text.range).map(|slice| {
+            ShapedRunInfo {
+                width: slice.glyphs.advance_for_byte_range(&slice.range, Au::from_px(0)).to_f32_px(),
+                is_whitespace: if slice.glyphs.is_whitespace() { 1 } else { 0 },
+            }
+        }).collect();
+    result.shrink_to_fit(); // we need to shrink it as we will only be passed a length to free it
+    unsafe {
+        assert!(!len.is_null());
+        *len = result.len() as size_t;
+    }
+    let ptr = result.as_mut_ptr();
+    mem::forget(result); // don't drop it here as we pass ownership to C
+    ptr
+}
+#[no_mangle]
+pub extern fn shaped_text_widths_free(info: *mut ShapedRunInfo, len: size_t) -> () {
+    let len = len as usize;
+    unsafe {
+        drop(Vec::from_raw_parts(info, len, len));
+    }
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_push_shaped_text(
+    ptr: *mut DisplayListBuilder,
+    x: f32, y: f32, w: f32, h: f32, // box containing text
+    r: f32, g: f32, b: f32, a: f32,
+    text: *mut ShapedText,
+    // positions is a vector of positions for slices of length len
+    // positions are relative to the passed rectangle
+    positions: *mut ShapedRunPosition, len: size_t) -> () {
+    
+    let dlb = unsafe {
+        assert!(!ptr.is_null());
+        &mut *ptr
+    };
+    let text = unsafe {
+        assert!(!text.is_null());
+        &*text
+    };
+    let positions = unsafe {
+        slice::from_raw_parts(positions, len)
+    };
+    let mut glyphs = Vec::new();
+    let topleft = LayoutPoint::new(x,y);
+    for (slice,pos) in text.run.natural_word_slices_in_visual_order(&text.range).zip(positions) {
+        let mut origin = LayoutPoint::new(topleft.x + pos.x, topleft.y +pos.y);
+        for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
+            let advance = glyph.advance().to_f32_px();
+            let offset = glyph.offset().unwrap_or(euclid::Point2D::zero());
+            let x = origin.x + offset.x.to_f32_px();
+            let y = origin.y + offset.y.to_f32_px();
+            let pos = LayoutPoint::new(x,y);
+            let glyph = GlyphInstance {
+                index: glyph.id(),
+                point: pos
+            };
+            glyphs.push(glyph);
+            origin.x = origin.x + advance;
+        }
+    }
+    dlb.builder.push_text(layout_rect(x,y,w,h), None,
+                          &glyphs, text.run.font_key,
+                          ColorF::new(r,g,b,a),
+                          text.run.actual_pt_size,
                           None);
 }
