@@ -70,8 +70,10 @@ mod font_template;
 mod platform;
 mod text;
 
-use libc::{c_char, uint32_t};
+use libc::{c_char, uint32_t, int32_t, size_t};
 use std::ffi::CStr;
+use std::slice;
+use std::mem;
 use webrender_api::{PipelineId,GlyphInstance,RenderNotifier,
                     DeviceUintSize,DeviceUintPoint,DeviceUintRect,
                     ResourceUpdates,Epoch,
@@ -106,13 +108,22 @@ impl RenderNotifier for WRWindow {
     }
 }
 
-type RenderFunction = unsafe extern "C" fn(*mut DisplayListBuilder) -> ();
+/// A function, given a display list and the (layout) width and height
+/// of the are to display, which builds the display list
+type RenderFunction = unsafe extern "C" fn(*mut DisplayListBuilder, f32, f32) -> ();
+/// A function called for every mouse event. The first two parameters
+/// are the (x,y) coordinates. The third represents the button
+/// pressed: 0 if no button was pressed/released, positive for
+/// pressed, negative for released. The absolute value is the button.
+type MouseHandler = unsafe extern "C" fn(f32, f32, int32_t) -> ();
+
 /// Create an object for a window. This should be passed a function to
 /// handle events for the window and a function to generate a display
 /// list.
 #[no_mangle]
 pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t,
-                         render: RenderFunction) -> () {
+                         render: RenderFunction,
+                         mouse:  MouseHandler) -> () {
     let title = unsafe {
         if title.is_null() {
             None
@@ -222,7 +233,31 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
                 glutin::Event::KeyboardInput(_,_,Some(glutin::VirtualKeyCode::Escape)) 
                     => break 'event_loop,
                 glutin::Event::Awakened => {
-                }
+                },
+                glutin::Event::MouseMoved(x,y) => {
+                    unsafe {
+                        let f = window.hidpi_factor();
+                        mouse(x as f32 / f, y as f32 / f, 0);
+                    }
+                },
+                glutin::Event::MouseInput(s,b,place) => {
+                    unsafe {
+                        let f = window.hidpi_factor();
+                        // this is not very nice. Total hack
+                        let (x,y) = place.unwrap_or((-99999,-99999));
+                        let (x,y) = (x as f32 / f, y as f32 / f);
+                        mouse(x, y,
+                              match s {
+                                  glutin::ElementState::Pressed => 1,
+                                  glutin::ElementState::Released => -1,
+                              } * match b {
+                                  glutin::MouseButton::Left => 1,
+                                  glutin::MouseButton::Right => 2,
+                                  glutin::MouseButton::Middle => 3,
+                                  glutin::MouseButton::Other(n) => 4+n as i32,
+                              });
+                    }
+                },
                 _ => println!("{:#?}", event),
             }
         }
@@ -243,7 +278,7 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
         // generate display list
         unsafe {
             let ptr: *mut DisplayListBuilder = &mut dlb;
-            render(ptr);
+            render(ptr,lwidth as f32, lheight as f32);
         };
         data_estimate = Some(dlb.builder.data.len());
 
