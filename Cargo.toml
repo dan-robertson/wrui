@@ -1,7 +1,7 @@
 [package]
-name = "wr-simple"
+name = "wrui"
 version = "0.1.0"
-authors = ["Dan Robertson <dar64@cam.ac.uk>"]
+authors = ["Dan Robertson <dan.robertson14@gmail.com>"]
 
 [lib]
 name = "wrui"
