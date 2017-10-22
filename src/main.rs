@@ -360,7 +360,7 @@ impl RenderNotifier for Notifier {
 }
 
 fn test_details(api: &RenderApi) -> Option<font::Font> {
-    use platform::font_list::{for_each_variation};
+    use platform::font_list::{for_each_variation, for_each_available_family};
     use font_template::{FontTemplate, FontTemplateDescriptor, font_weight, font_stretch, font_variant_caps};
     use font::{FontHandleMethods, Font};
     use atoms::Atom;
@@ -368,7 +368,9 @@ fn test_details(api: &RenderApi) -> Option<font::Font> {
     let mut have_match = false;
     let mut dat = None;
     let desc = FontTemplateDescriptor::new(font_weight::T::normal(), font_stretch::T::normal, false);
-    for_each_variation("Cantarell", |variation| {
+    for_each_available_family(|f| println!("{}", f));
+    for_each_variation("DejaVu Sans", |variation| {
+        println!("variation: {}", variation);
         if have_match { return; }
         let template = FontTemplate::new(Atom::from(&*variation), None);
         match template {
@@ -376,7 +378,7 @@ fn test_details(api: &RenderApi) -> Option<font::Font> {
             Ok(mut template) => {
                 match template.data_for_descriptor(&fc, &desc) {
                     None => println!("No match: {}", variation),
-                    x => { have_match = true; dat = x; }
+                    x => { println!("Selected: {}", variation); have_match = true; dat = x; }
                 }
             }
         }

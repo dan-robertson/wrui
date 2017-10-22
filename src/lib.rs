@@ -179,6 +179,7 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
     renderer.set_render_notifier(Box::new(WRWindow::new(window.create_window_proxy())));
 
     //set up a font
+    //todo: should probably look for best template match and try to use the font the system wants.
     let fc = platform::font_context::FontContextHandle::new();
     let mut have_match = false;
     let mut template_data = None;
@@ -186,7 +187,7 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
         font_template::font_weight::T::normal(),
         font_template::font_stretch::T::normal,
         false);
-    platform::font_list::for_each_variation("Cantarell", |variation| {
+    platform::font_list::for_each_variation("DejaVu Sans", |variation| {
         if have_match { return; }
         let template = font_template::FontTemplate::new(Atom::from(&*variation), None);
         match template {
@@ -199,7 +200,7 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
             }
         }
     });
-    if template_data.is_none() { panic!("Can't find font Cantarell"); }
+    if template_data.is_none() { panic!("Can't find font DejaVu Sans"); }
     let fdtemplate = template_data.unwrap();
     let key = api.generate_font_key();
     let updates = {
