@@ -79,7 +79,8 @@ use webrender_api::{PipelineId,GlyphInstance,RenderNotifier,
                     ResourceUpdates,Epoch,
                     LayoutSize,LayoutRect,LayoutPoint,
                     ColorF,BorderWidths,BorderDetails,
-                    NormalBorder,BorderSide,BorderRadius};
+                    NormalBorder,BorderSide,BorderRadius,
+                    LocalClip, ComplexClipRegion};
 use gleam::gl;
 use app_units::Au;
 use atoms::Atom;
@@ -359,15 +360,76 @@ fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
     LayoutRect::new(LayoutPoint::new(x,y), LayoutSize::new(w,h))
 }
 
-#[no_mangle]
-pub extern fn display_list_builder_push_rect(ptr: *mut DisplayListBuilder,
-                                             x: f32, y: f32, w: f32, h: f32,
-                                             r: f32, g: f32, b: f32, a: f32) -> () {
-    let dlb = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    dlb.builder.push_rect(layout_rect(x,y,w,h), None, ColorF::new(r,g,b,a));
+
+/// # with_clip!{
+/// #   display_list_builder_push_name, display_list_builder_push_name_c,
+/// #   display_list_builder_push_name_cc,
+/// #   fn (dlb, localClip, args...) -> result {
+/// #     body
+/// #   }
+/// # }
+///
+/// generates public external non-mangled functions:
+/// # display_list_builder_push_name(ptr: *mut DisplayListBuilder, args...)
+/// # display_list_builder_push_name_c(ptr: *mut DisplayListBuilder, cx:f32, cy:f32, cw:f32, ch:f32,
+/// #                                  args...)
+/// # display_list_builder_push_name_cc(ptr: *mut DisplayListBuilder, cx:f32, cy:f32, cw:f32, ch:f32,
+/// #                                   ccx: f32, ccy: f32, ccw: f32, cch: f32,
+/// #                                   cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
+/// #                                   ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
+/// #                                   args...)
+macro_rules! with_clip {
+    ($name:ident , $namec:ident , $namecc:ident ,
+     fn ( $dlb:ident , $local_clip:ident , $($arg:ident : $argt:ty),* ) -> $result:ty $body:block) =>
+    {
+        #[no_mangle]
+        pub extern fn $name(ptr: *mut DisplayListBuilder, $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $local_clip = None;
+            $body
+        }
+        #[no_mangle]
+        pub extern fn $namec(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
+                          $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $local_clip = Some(LocalClip::from(layout_rect(cx,cy,cw,ch)));
+            $body
+        }
+        #[no_mangle]
+        pub extern fn $namecc(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
+                         ccx: f32, ccy: f32, ccw: f32, cch: f32,
+                         cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
+                         ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
+                         $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $local_clip = Some(LocalClip::RoundedRect(
+                layout_rect(cx, cy, cw, ch),
+                ComplexClipRegion::new(layout_rect(ccx, ccy, ccw, cch),
+                                       border_radius(cctlw, cctlh, cctrw, cctrh,
+                                                     ccblw, ccblh, ccbrw, ccbrh))));
+            $body
+        }
+    }
+}
+
+with_clip! { 
+    display_list_builder_push_rect,
+    display_list_builder_push_rect_c,
+    display_list_builder_push_rect_cc,
+    fn (dlb, local_clip,
+        x: f32, y: f32, w: f32, h: f32,
+        r: f32, g: f32, b: f32, a: f32) -> () {
+        dlb.builder.push_rect(layout_rect(x,y,w,h), local_clip, ColorF::new(r,g,b,a));
+    }
 }
 
 #[repr(C)]
@@ -411,90 +473,92 @@ fn border_radius(tlw: f32, tlh: f32, trw: f32, trh: f32,
     }
 }
 
-#[no_mangle]
-pub extern fn display_list_builder_push_border_n(ptr: *mut DisplayListBuilder,
-                                                 x: f32, y: f32, w: f32, h: f32,
-                                                 leftw: f32, topw: f32, rightw: f32, bottomw: f32,
-                                                 lr: f32, lg: f32, lb: f32, la: f32, ls: BorderStyle,
-                                                 tr: f32, tg: f32, tb: f32, ta: f32, ts: BorderStyle,
-                                                 rr: f32, rg: f32, rb: f32, ra: f32, rs: BorderStyle,
-                                                 br: f32, bg: f32, bb: f32, ba: f32, bs: BorderStyle,
-                                                 tlw: f32, tlh: f32, trw: f32, trh: f32,
-                                                 blw: f32, blh: f32, brw: f32, brh: f32) -> () {
-    let dlb = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    dlb.builder.push_border(layout_rect(x,y,w,h), None,
-                            BorderWidths { left: leftw, top: topw, right: rightw, bottom: bottomw },
-                            BorderDetails::Normal(NormalBorder {
-                                left:   b(lr,lg,lb,la,ls),
-                                top:    b(tr,tg,tb,ta,ts),
-                                right:  b(rr,rg,rb,ra,rs),
-                                bottom: b(br,bg,bb,ba,bs),
-                                radius: border_radius(tlw,tlh,trw,trh,blw,blh,brw,brh),
-                            }));
-    
-    fn b(r: f32, g: f32, b: f32, a: f32, s: BorderStyle) -> BorderSide {
-        BorderSide {
-            color: ColorF::new(r,g,b,a),
-            style: s.to_wr()
+// normal border
+with_clip! { 
+    display_list_builder_push_border_n,
+    display_list_builder_push_border_nc,
+    display_list_builder_push_border_ncc,
+    fn (dlb, local_clip,
+        x: f32, y: f32, w: f32, h: f32,
+        leftw: f32, topw: f32, rightw: f32, bottomw: f32,
+        lr: f32, lg: f32, lb: f32, la: f32, ls: BorderStyle,
+        tr: f32, tg: f32, tb: f32, ta: f32, ts: BorderStyle,
+        rr: f32, rg: f32, rb: f32, ra: f32, rs: BorderStyle,
+        br: f32, bg: f32, bb: f32, ba: f32, bs: BorderStyle,
+        tlw: f32, tlh: f32, trw: f32, trh: f32,
+        blw: f32, blh: f32, brw: f32, brh: f32) -> () {
+        dlb.builder.push_border(layout_rect(x,y,w,h), local_clip,
+                                BorderWidths { left: leftw, top: topw, right: rightw, bottom: bottomw },
+                                BorderDetails::Normal(NormalBorder {
+                                    left:   b(lr,lg,lb,la,ls),
+                                    top:    b(tr,tg,tb,ta,ts),
+                                    right:  b(rr,rg,rb,ra,rs),
+                                    bottom: b(br,bg,bb,ba,bs),
+                                    radius: border_radius(tlw,tlh,trw,trh,blw,blh,brw,brh),
+                                }));
+        
+        fn b(r: f32, g: f32, b: f32, a: f32, s: BorderStyle) -> BorderSide {
+            BorderSide {
+                color: ColorF::new(r,g,b,a),
+                style: s.to_wr()
+            }
         }
     }
 }
 
-#[no_mangle]
-pub extern fn display_list_builder_push_text(ptr: *mut DisplayListBuilder,
-                                             x: f32, y: f32, w: f32, h: f32, // box containing text
-                                             r: f32, g: f32, b: f32, a: f32,
-                                             x0: f32, y0: f32, //origin of first character
-                                             text: *const c_char) -> () {
-    let dlb = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    let text = unsafe {
-        assert!(!text.is_null());
-        CStr::from_ptr(text).to_str().unwrap()
-    };
-
-    //first shape text
-    let options = font::ShapingOptions {
-        letter_spacing: None,
-        // word spacing is (fixed amount, % of width of ' ')
-        word_spacing: (Au::new(0), ordered_float::NotNaN::new(1.0).unwrap()),
-        script: unicode_script::Script::Unknown,
-        flags: font::ShapingFlags::empty(),
-    };
-    let run = text::TextRun::new(&mut dlb.font, text.to_string(), &options, unicode_bidi::Level::ltr());
-    let len: text::glyph::ByteIndex =
-        run.glyphs.iter().fold(text::glyph::ByteIndex(0),
-                               |sum, x| sum + x.range.length());
-    let range = range::Range::new(text::glyph::ByteIndex(0),len);
-
-    //now collect glyphs
-    let mut origin = LayoutPoint::new(x0, y0);
-    let mut glyphs = Vec::new(); // we really ought to know how big to make this
-    for slice in run.natural_word_slices_in_visual_order(&range) {
-        for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
-            let advance = glyph.advance().to_f32_px();
-            let offset = glyph.offset().unwrap_or(euclid::Point2D::zero());
-            let x = origin.x + offset.x.to_f32_px();
-            let y = origin.y + offset.y.to_f32_px();
-            let pos = LayoutPoint::new(x,y);
-            let glyph = GlyphInstance {
-                index: glyph.id(),
-                point: pos
-            };
-            glyphs.push(glyph);
-            origin.x = origin.x + advance;
+with_clip! {
+    display_list_builder_push_text,
+    display_list_builder_push_text_c,
+    display_list_builder_push_text_cc,
+    fn (dlb, local_clip,
+        x: f32, y: f32, w: f32, h: f32, // box containing text
+        r: f32, g: f32, b: f32, a: f32,
+        x0: f32, y0: f32, //origin of first character
+        text: *const c_char) -> () {
+        
+        let text = unsafe {
+            assert!(!text.is_null());
+            CStr::from_ptr(text).to_str().unwrap()
+        };
+        
+        //first shape text
+        let options = font::ShapingOptions {
+            letter_spacing: None,
+            // word spacing is (fixed amount, % of width of ' ')
+            word_spacing: (Au::new(0), ordered_float::NotNaN::new(1.0).unwrap()),
+            script: unicode_script::Script::Unknown,
+            flags: font::ShapingFlags::empty(),
+        };
+        let run = text::TextRun::new(&mut dlb.font, text.to_string(), &options, unicode_bidi::Level::ltr());
+        let len: text::glyph::ByteIndex =
+            run.glyphs.iter().fold(text::glyph::ByteIndex(0),
+                                   |sum, x| sum + x.range.length());
+        let range = range::Range::new(text::glyph::ByteIndex(0),len);
+        
+        //now collect glyphs
+        let mut origin = LayoutPoint::new(x0, y0);
+        let mut glyphs = Vec::new(); // we really ought to know how big to make this
+        for slice in run.natural_word_slices_in_visual_order(&range) {
+            for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
+                let advance = glyph.advance().to_f32_px();
+                let offset = glyph.offset().unwrap_or(euclid::Point2D::zero());
+                let x = origin.x + offset.x.to_f32_px();
+                let y = origin.y + offset.y.to_f32_px();
+                let pos = LayoutPoint::new(x,y);
+                let glyph = GlyphInstance {
+                    index: glyph.id(),
+                    point: pos
+                };
+                glyphs.push(glyph);
+                origin.x = origin.x + advance;
+            }
         }
+        dlb.builder.push_text(layout_rect(x,y,w,h), local_clip,
+                              &glyphs, run.font_key,
+                              ColorF::new(r,g,b,a),
+                              run.actual_pt_size,
+                              None);
     }
-    dlb.builder.push_text(layout_rect(x,y,w,h), None,
-                          &glyphs, run.font_key,
-                          ColorF::new(r,g,b,a),
-                          run.actual_pt_size,
-                          None);
 }
 
 #[no_mangle]
@@ -578,48 +642,47 @@ pub extern fn shaped_text_widths_free(info: *mut ShapedRunInfo, len: size_t) -> 
     }
 }
 
-#[no_mangle]
-pub extern fn display_list_builder_push_shaped_text(
-    ptr: *mut DisplayListBuilder,
-    x: f32, y: f32, w: f32, h: f32, // box containing text
-    r: f32, g: f32, b: f32, a: f32,
-    text: *mut ShapedText,
-    // positions is a vector of positions for slices of length len
-    // positions are relative to the passed rectangle
-    positions: *mut ShapedRunPosition, len: size_t) -> () {
+with_clip! {
+    display_list_builder_push_shaped_text,
+    display_list_builder_push_shaped_text_c,
+    display_list_builder_push_shaped_text_cc,
+    fn (dlb, local_clip,
+        x: f32, y: f32, w: f32, h: f32, // box containing text
+        r: f32, g: f32, b: f32, a: f32,
+        text: *mut ShapedText,
+        // positions is a vector of positions for slices of length len
+        // positions are relative to the passed rectangle
+        positions: *mut ShapedRunPosition, len: size_t) -> () {
     
-    let dlb = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    let text = unsafe {
-        assert!(!text.is_null());
-        &*text
-    };
-    let positions = unsafe {
-        slice::from_raw_parts(positions, len)
-    };
-    let mut glyphs = Vec::new();
-    let topleft = LayoutPoint::new(x,y);
-    for (slice,pos) in text.run.natural_word_slices_in_visual_order(&text.range).zip(positions) {
-        let mut origin = LayoutPoint::new(topleft.x + pos.x, topleft.y +pos.y);
-        for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
-            let advance = glyph.advance().to_f32_px();
-            let offset = glyph.offset().unwrap_or(euclid::Point2D::zero());
-            let x = origin.x + offset.x.to_f32_px();
-            let y = origin.y + offset.y.to_f32_px();
-            let pos = LayoutPoint::new(x,y);
-            let glyph = GlyphInstance {
-                index: glyph.id(),
-                point: pos
-            };
-            glyphs.push(glyph);
-            origin.x = origin.x + advance;
+        let text = unsafe {
+            assert!(!text.is_null());
+            &*text
+        };
+        let positions = unsafe {
+            slice::from_raw_parts(positions, len)
+        };
+        let mut glyphs = Vec::new();
+        let topleft = LayoutPoint::new(x,y);
+        for (slice,pos) in text.run.natural_word_slices_in_visual_order(&text.range).zip(positions) {
+            let mut origin = LayoutPoint::new(topleft.x + pos.x, topleft.y +pos.y);
+            for glyph in slice.glyphs.iter_glyphs_for_byte_range(&slice.range) {
+                let advance = glyph.advance().to_f32_px();
+                let offset = glyph.offset().unwrap_or(euclid::Point2D::zero());
+                let x = origin.x + offset.x.to_f32_px();
+                let y = origin.y + offset.y.to_f32_px();
+                let pos = LayoutPoint::new(x,y);
+                let glyph = GlyphInstance {
+                    index: glyph.id(),
+                    point: pos
+                };
+                glyphs.push(glyph);
+                origin.x = origin.x + advance;
+            }
         }
+        dlb.builder.push_text(layout_rect(x,y,w,h), local_clip,
+                              &glyphs, text.run.font_key,
+                              ColorF::new(r,g,b,a),
+                              text.run.actual_pt_size,
+                              None);
     }
-    dlb.builder.push_text(layout_rect(x,y,w,h), None,
-                          &glyphs, text.run.font_key,
-                          ColorF::new(r,g,b,a),
-                          text.run.actual_pt_size,
-                          None);
 }
