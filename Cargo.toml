@@ -5,6 +5,7 @@ authors = ["Dan Robertson <dan.robertson14@gmail.com>"]
 
 [lib]
 name = "wrui"
+path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -59,4 +60,9 @@ simd = "0.2.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 dwrote = "0.4"
 truetype = "0.26"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+doc = false
 

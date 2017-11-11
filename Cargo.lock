@@ -1,5 +1,5 @@
 [root]
-name = "wr-simple"
+name = "wrui"
 version = "0.1.0"
 dependencies = [
  "app_units 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
