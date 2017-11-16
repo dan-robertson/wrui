@@ -13,9 +13,6 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 extern crate alloc;
 
-#[macro_use]
-extern crate bitflags;
-
 // Mac OS-specific library dependencies
 #[cfg(target_os = "macos")] extern crate byteorder;
 #[cfg(target_os = "macos")] extern crate core_foundation;
@@ -27,41 +24,6 @@ extern crate bitflags;
 #[cfg(target_os = "windows")] extern crate truetype;
 
 extern crate euclid;
-//extern crate fnv;
-
-#[cfg(target_os = "linux")]
-extern crate fontconfig;
-//extern crate fontsan;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate freetype;
-//extern crate gfx_traits;
-
-// Eventually we would like the shaper to be pluggable, as many operating systems have their own
-// shapers. For now, however, this is a hard dependency.
-extern crate harfbuzz_sys as harfbuzz;
-
-extern crate heapsize;
-#[macro_use] extern crate heapsize_derive;
-//extern crate ipc_channel;
-#[macro_use]
-extern crate lazy_static;
-extern crate libc;
-#[macro_use]
-extern crate log;
-extern crate ordered_float;
-#[macro_use] extern crate serde;
-#[cfg(any(target_feature = "sse2", target_feature = "neon"))]
-extern crate simd;
-extern crate smallvec;
-//extern crate style;
-//extern crate style_traits;
-extern crate unicode_bidi;
-extern crate unicode_script;
-extern crate xi_unicode;
-#[cfg(target_os = "android")]
-extern crate xml5ever;
-extern crate num_traits;
-extern crate string_cache;
 
 //other crates
 
@@ -76,16 +38,6 @@ use gleam::gl;
 use webrender_api::*;
 use std::boxed::Box;
 use app_units::Au;
-
-//mod servo_font;
-#[macro_use] pub mod range;
-pub mod atoms;
-
-#[macro_use] pub mod font;
-pub mod font_template;
-pub mod platform;
-pub mod text;
-
 
 fn main() {
 
@@ -125,7 +77,9 @@ fn main() {
     };
 
     let (mut renderer, sender) =
-        webrender::Renderer::new(gl, opts).unwrap();
+        webrender::Renderer::new(gl,
+                                 Box::new(Notifier::new(window.create_window_proxy())),
+                                 opts).unwrap();
     let api = sender.create_api();
 
     let (width, height) = window.get_inner_size_pixels().unwrap();
@@ -136,10 +90,6 @@ fn main() {
     api.set_root_pipeline(document_id.clone(), PipelineId(0,0));
 
 //    build_simple(&api, PipelineId(0,0), Epoch(0), 800, 480);
-
-    renderer.set_render_notifier(Box::new(Notifier::new(window.create_window_proxy())));
-
-    let mut font_data = test_details(&api).unwrap();
 
     let mut i: u64;
     i = 0;
@@ -169,7 +119,6 @@ fn main() {
 
         build_simple(&api, (document_id.clone(), PipelineId(0,0)),
                      renderer_next_epoch(&renderer, PipelineId(0,0)),
-                     &mut font_data,
                      width, height);
 
         api.generate_frame(document_id.clone(), None);
@@ -183,7 +132,8 @@ fn main() {
         let renderstart = std::time::Instant::now();
 
         api.set_window_parameters(document_id.clone(),
-                                  size, DeviceUintRect::new(DeviceUintPoint::zero(), size));
+                                  size, DeviceUintRect::new(DeviceUintPoint::zero(), size),
+                                  window.hidpi_factor());
 
         renderer.render(size);
 
@@ -229,9 +179,28 @@ fn format_duration_fps(d: std::time::Duration) -> String {
     }
 }
 
+#[inline]
+fn primitive_info(rect: LayoutRect) -> LayoutPrimitiveInfo {
+    PrimitiveInfo {
+        rect: rect,
+        local_clip: LocalClip::Rect(rect),
+        edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+        is_backface_visible: true,
+        tag: None,
+    }
+}
+
+#[inline]
+fn primitive_info2(rect: LayoutRect, w: &BorderWidths) -> LayoutPrimitiveInfo {
+    let rect2 = LayoutRect::new(LayoutPoint::new(rect.origin.x - w.left / 2.0,
+                                                 rect.origin.y - w.top / 2.0),
+                                LayoutSize::new(rect.size.width + w.left / 2.0 + w.right / 2.0,
+                                                rect.size.height + w.top / 2.0 + w.bottom / 2.0));
+    primitive_info(rect2)
+}
+
 fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, PipelineId),
-                epoch: Epoch, font: &mut font::Font,
-                width: u32, height: u32) {
+                epoch: Epoch, width: u32, height: u32) {
     let n = { let Epoch(n) = epoch; ((n % 200) as f32) / 200.0 };
     let size = LayoutSize::new(width as f32, height as f32);
     let mut builder = DisplayListBuilder::new(pipeline_id, size);
@@ -240,27 +209,31 @@ fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, Pipeli
         None,
         LayoutRect::new(LayoutPoint::new(30.0,40.0), LayoutSize::new(100.0,200.0)),
         vec![ComplexClipRegion {
-            rect: LayoutRect::new(LayoutPoint::new(30.0 + 0.5,40.0 + 1.0),
-                                  LayoutSize::new(100.0-0.5-4.0,200.0-1.0-2.0)),
+            rect: LayoutRect::new(LayoutPoint::new(30.0,40.0),
+                                  LayoutSize::new(100.0,200.0)),
             radii: BorderRadius {
                 top_left: LayoutSize::new(5.0,5.0),
                 top_right: LayoutSize::new(50.0,100.0),
                 bottom_left: LayoutSize::zero(),
                 bottom_right: LayoutSize::new(15.0,15.0)
-            }}],
+            },
+            mode: ClipMode::Clip}],
         None);
     builder.push_clip_id(clip);
 
-    builder.push_rect(LayoutRect::new(LayoutPoint::new(30.0,40.0), LayoutSize::new(100.0,200.0)),
-                      None,
+    builder.push_rect(&primitive_info(LayoutRect::new(LayoutPoint::new(30.0,40.0),
+                                                      LayoutSize::new(100.0,200.0))),
                       ColorF{r:1.0,g:1.0,b:1.0,a:1.0});
 
     builder.pop_clip_id();
     
     // yuck!
-    builder.push_border(LayoutRect::new(LayoutPoint::new(30.0,40.0), LayoutSize::new(100.0,200.0)),
-                        None,
-                        BorderWidths { left: 1.0, top: 2.0, right: 8.0, bottom: 4.0 },
+    let widths = BorderWidths { left: 1.0, top: 2.0, right: 8.0, bottom: 4.0 };
+
+    builder.push_border(&primitive_info2(LayoutRect::new(LayoutPoint::new(30.0,40.0),
+                                                         LayoutSize::new(100.0,200.0)),
+                                         &widths),
+                        widths,
                         BorderDetails::Normal(NormalBorder {
                             left: BorderSide { color: ColorF { r: 1.0, g: 1.0, b:0.0, a: 0.7},
                                                style: BorderStyle::Solid },
@@ -271,13 +244,13 @@ fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, Pipeli
                             bottom: BorderSide { color: ColorF { r: 0.5, g: 1.0, b:0.5, a: 0.7},
                                                  style: BorderStyle::Solid },
                             radius: BorderRadius {
-                                top_left: LayoutSize::new(5.0,5.0),
-                                top_right: LayoutSize::new(50.0,100.0),
+                                top_left: LayoutSize::new(5.0 + widths.left / 2.0, 5.0 + widths.top / 2.0),
+                                top_right: LayoutSize::new(50.0 + widths.right / 2.0, 100.0 + widths.top / 2.0),
                                 bottom_left: LayoutSize::zero(),
-                                bottom_right: LayoutSize::new(15.0,15.0)
+                                bottom_right: LayoutSize::new(15.0 + widths.right / 2.0,15.0 + widths.bottom / 2.0)
                             }
                         }));
-
+    /*
     let mut origin = euclid::Point2D::new(Au::from_px(200), Au::from_px(100));
     let mut glyphs = Vec::new();
     let options = font::ShapingOptions { letter_spacing: None, 
@@ -317,7 +290,7 @@ fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, Pipeli
                       run.actual_pt_size,
                       None);
     builder.pop_text_shadow();
-
+    */
     api.set_display_list(document_id,
                          epoch,
                          Some(ColorF{r:0.5,g:0.3,b:0.3,a:1.0}),
@@ -348,17 +321,23 @@ impl Notifier {
 }
 
 impl RenderNotifier for Notifier {
-    fn new_frame_ready(&mut self) {
+    fn new_frame_ready(&self) {
         #[cfg(not(target_os = "android"))]
         self.window_proxy.wakeup_event_loop();
     }
     
-    fn new_scroll_frame_ready(&mut self, _composite_needed: bool){
+    fn new_scroll_frame_ready(&self, _composite_needed: bool){
         #[cfg(not(target_os = "android"))]
         self.window_proxy.wakeup_event_loop();
     }
+    fn clone(&self) -> Box<RenderNotifier> {
+        Box::new(Notifier::new(self.window_proxy.clone()))
+    }
 }
 
+unsafe impl Send for Notifier { }
+
+/*
 fn test_details(api: &RenderApi) -> Option<font::Font> {
     use platform::font_list::{for_each_variation, for_each_available_family};
     use font_template::{FontTemplate, FontTemplateDescriptor, font_weight, font_stretch, font_variant_caps};
@@ -403,4 +382,5 @@ fn test_details(api: &RenderApi) -> Option<font::Font> {
     let font = Font::new(handle, font_variant_caps::T::normal, desc, pt_size.clone(), pt_size.clone(), key);
     Some(font)
 }
+*/
 
