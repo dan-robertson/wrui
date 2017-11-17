@@ -10,34 +10,38 @@
 
 #![feature(alloc)]
 #![feature(allocator_api)]
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate alloc;
-
-// Mac OS-specific library dependencies
-#[cfg(target_os = "macos")] extern crate byteorder;
-#[cfg(target_os = "macos")] extern crate core_foundation;
-#[cfg(target_os = "macos")] extern crate core_graphics;
-#[cfg(target_os = "macos")] extern crate core_text;
-
-// Windows-specific library dependencies
-#[cfg(target_os = "windows")] extern crate dwrote;
-#[cfg(target_os = "windows")] extern crate truetype;
 
 extern crate euclid;
-
-//other crates
-
 extern crate gleam;
 extern crate glutin;
 extern crate webrender;
 extern crate webrender_api;
 extern crate app_units;
+extern crate ipc_channel;
+extern crate net_traits;
+extern crate gfx;
+extern crate style;
+extern crate servo_arc;
+extern crate range;
+
+extern crate unicode_bidi;
+extern crate unicode_script;
+extern crate ordered_float;
 
 //use glutin;
 use gleam::gl;
 use webrender_api::*;
 use std::boxed::Box;
 use app_units::Au;
+use gfx::font_cache_thread::FontCacheThread;
+use gfx::font_context::FontContext;
+use gfx::text;
+use gfx::font::{ShapingOptions, ShapingFlags};
+use style::properties::style_structs::Font as FontStyle;
+use style::Atom;
+use servo_arc::Arc as ServoArc;
+
+mod fake_resource_thread; 
 
 fn main() {
 
@@ -76,11 +80,16 @@ fn main() {
         ..Default::default()
     };
 
+    let fake_resource_thread = fake_resource_thread::new_fake_resource_thread();
+
     let (mut renderer, sender) =
         webrender::Renderer::new(gl,
                                  Box::new(Notifier::new(window.create_window_proxy())),
                                  opts).unwrap();
     let api = sender.create_api();
+
+    let font_cache_thread = FontCacheThread::new(fake_resource_thread, sender.create_api());
+    let mut font_context = FontContext::new(font_cache_thread.clone());
 
     let (width, height) = window.get_inner_size_pixels().unwrap();
     let size = DeviceUintSize::new(width,height);
@@ -119,6 +128,7 @@ fn main() {
 
         build_simple(&api, (document_id.clone(), PipelineId(0,0)),
                      renderer_next_epoch(&renderer, PipelineId(0,0)),
+                     &mut font_context,
                      width, height);
 
         api.generate_frame(document_id.clone(), None);
@@ -200,7 +210,8 @@ fn primitive_info2(rect: LayoutRect, w: &BorderWidths) -> LayoutPrimitiveInfo {
 }
 
 fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, PipelineId),
-                epoch: Epoch, width: u32, height: u32) {
+                epoch: Epoch, font_context: &mut FontContext,
+                width: u32, height: u32) {
     let n = { let Epoch(n) = epoch; ((n % 200) as f32) / 200.0 };
     let size = LayoutSize::new(width as f32, height as f32);
     let mut builder = DisplayListBuilder::new(pipeline_id, size);
@@ -250,14 +261,19 @@ fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, Pipeli
                                 bottom_right: LayoutSize::new(15.0 + widths.right / 2.0,15.0 + widths.bottom / 2.0)
                             }
                         }));
-    /*
+    
+    let fonts = font_context.layout_font_group_for_style(
+        describe_font("DejaVu Sans", Au::from_px(30), false, 400, 5));
+    let mut font = fonts.fonts[0].borrow_mut();
+
     let mut origin = euclid::Point2D::new(Au::from_px(200), Au::from_px(100));
     let mut glyphs = Vec::new();
-    let options = font::ShapingOptions { letter_spacing: None, 
-                                         word_spacing: (Au::new(0),ordered_float::NotNaN::new(1.0).unwrap()),
-                                         script: unicode_script::Script::Unknown,
-                                         flags: font::ShapingFlags::empty()};
-    let run = text::TextRun::new(font, "Hello, World!".to_string(), &options, unicode_bidi::Level::ltr());
+    let options = ShapingOptions { letter_spacing: None, 
+                                   word_spacing: (Au::new(0),
+                                                  ordered_float::NotNaN::new(1.0).unwrap()),
+                                   script: unicode_script::Script::Unknown,
+                                   flags: ShapingFlags::empty()};
+    let run = text::TextRun::new(&mut font, "Hello, World!".to_string(), &options, unicode_bidi::Level::ltr());
     let len: text::glyph::ByteIndex = (*run.glyphs).iter().fold(text::glyph::ByteIndex(0),
                                                                 |sum,x| sum + x.range.length());
     for slice in run.natural_word_slices_in_visual_order(&range::Range::new(text::glyph::ByteIndex(0),len)) {
@@ -275,22 +291,24 @@ fn build_simple(api: &RenderApi, (document_id, pipeline_id): (DocumentId, Pipeli
             origin.x = origin.x + advance;
         }
     }
-    builder.push_text_shadow(LayoutRect::new(LayoutPoint::new(150.0, 50.0), LayoutSize::new(500.0, 100.0)),
-                             None,
-                             TextShadow {
-                                 offset: LayoutVector2D::new(-20.0*n,20.0*n),
-                                 color: ColorF{r:0.0, g: 0.0, b: 0.0, a: 1.0},
-                                 blur_radius: 5.0*n
-                             });
-    builder.push_text(LayoutRect::new(LayoutPoint::new(150.0, 50.0), LayoutSize::new(500.0, 100.0)),
-                      None,
+    builder.push_shadow(&primitive_info(
+        LayoutRect::new(LayoutPoint::new(150.0, 50.0), LayoutSize::new(500.0, 100.0))),
+                        Shadow {
+                            offset: LayoutVector2D::new(-20.0*n,20.0*n),
+                            color: ColorF{r:0.0, g: 0.0, b: 0.0, a: 1.0},
+                            blur_radius: 5.0*n
+                        });
+    builder.push_text(&primitive_info(
+        LayoutRect::new(LayoutPoint::new(150.0, 50.0), LayoutSize::new(500.0, 100.0))),
                       &glyphs,
                       run.font_key,
                       ColorF {r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
-                      run.actual_pt_size,
                       None);
-    builder.pop_text_shadow();
-    */
+    builder.pop_all_shadows();
+
+    builder.push_clear_rect(&primitive_info(
+        LayoutRect::new(LayoutPoint::new(150.0, 150.0), LayoutSize::new(200.,200.))));
+
     api.set_display_list(document_id,
                          epoch,
                          Some(ColorF{r:0.5,g:0.3,b:0.3,a:1.0}),
@@ -336,6 +354,42 @@ impl RenderNotifier for Notifier {
 }
 
 unsafe impl Send for Notifier { }
+
+fn describe_font(name: &str, size: Au, italic: bool, weight: u16, stretch: u8) -> ServoArc<FontStyle> {
+    use style::computed_values::{font_stretch, font_weight, font_variant_caps, font_style};
+    use style::computed_values::font_family;
+    use style::computed_values::font_family::{FontFamily, FamilyName, FamilyNameSyntax, FontFamilyList};
+    use style::values::computed::font::FontSize;
+    use style::values::computed::length::NonNegativeLength;
+    let mut res = FontStyle {
+        font_family: font_family::T(FontFamilyList::new(vec![
+            FontFamily::FamilyName(FamilyName {
+                name: Atom::from(name),
+                syntax: FamilyNameSyntax::Quoted,
+            })])),
+        font_style: if italic { font_style::T::italic } else { font_style::T::normal },
+        font_variant_caps: font_variant_caps::T::normal,
+        font_weight: font_weight::T::from_gecko_weight(weight),
+        font_size: FontSize {
+            size: NonNegativeLength::from(size), keyword_info: None
+        },
+        font_stretch: match stretch {
+            1 => font_stretch::T::ultra_condensed,
+            2 => font_stretch::T::extra_condensed,
+            3 => font_stretch::T::condensed,
+            4 => font_stretch::T::semi_condensed,
+            5 => font_stretch::T::normal,
+            6 => font_stretch::T::semi_expanded,
+            7 => font_stretch::T::expanded,
+            8 => font_stretch::T::extra_expanded,
+            9 => font_stretch::T::ultra_expanded,
+            _ => font_stretch::T::normal
+        },
+        hash: 0
+    };
+    res.compute_font_hash();
+    ServoArc::new(res)
+}
 
 /*
 fn test_details(api: &RenderApi) -> Option<font::Font> {

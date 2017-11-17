@@ -28,7 +28,15 @@ gfx = {git = "https://github.com/dan-robertson/servo"}
 # TODO: keep checking that these are required
 style = {git = "https://github.com/dan-robertson/servo", features = ["servo"]}
 style_traits = {git = "https://github.com/dan-robertson/servo", features = ["servo"]}
+net_traits = {git = "https://github.com/dan-robertson/servo"}
+servo_arc = {git = "https://github.com/dan-robertson/servo"}
+range = {git = "https://github.com/dan-robertson/servo"}
+
 url = {version = "1.6", features = ["heapsize"]}
+ipc-channel = "0.9"
+unicode-bidi = {version = "0.3", features = ["with_serde"]}
+ordered-float = "0.4"
+unicode-script = {version = "0.1", features = ["harfbuzz"]}
 
 
 # for servo gfx (font handling) stuff
@@ -44,11 +52,10 @@ url = {version = "1.6", features = ["heapsize"]}
 #lazy_static = "0.2"
 #libc = "0.2"
 #log = "0.3.5"
-#ordered-float = "0.4"
 #serde = "1.0"
 #smallvec = "0.4"
-#unicode-bidi = {version = "0.3", features = ["with_serde"]}
-#unicode-script = {version = "0.1", features = ["harfbuzz"]}
+
+
 #xi-unicode = "0.1.0"
 
 #[target.'cfg(target_os = "macos")'.dependencies]
