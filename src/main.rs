@@ -1,16 +1,5 @@
 // crates and stuff from servo_font
 
-#![feature(cfg_target_feature)]
-#![feature(box_syntax)]
-#![feature(step_trait)]
-
-#![feature(unique)]
-#![feature(range_contains)]
-#![feature(fn_must_use)]
-
-#![feature(alloc)]
-#![feature(allocator_api)]
-
 extern crate euclid;
 extern crate gleam;
 extern crate glutin;
@@ -89,7 +78,7 @@ fn main() {
     let api = sender.create_api();
 
     let font_cache_thread = FontCacheThread::new(fake_resource_thread, sender.create_api());
-    let mut font_context = FontContext::new(font_cache_thread.clone());
+    let mut font_context = FontContext::new(font_cache_thread);
 
     let (width, height) = window.get_inner_size_pixels().unwrap();
     let size = DeviceUintSize::new(width,height);

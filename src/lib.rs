@@ -1,90 +1,66 @@
+#![recursion_limit = "128"]
+#![feature(libc)]
 
-#![feature(cfg_target_feature)]
-#![feature(box_syntax)]
-#![feature(step_trait)]
-
-#![feature(unique)]
-#![feature(range_contains)]
-#![feature(fn_must_use)]
-
-#![feature(alloc)]
-#![feature(allocator_api)]
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate alloc;
-
-#[macro_use]
-extern crate bitflags;
-
-// Mac OS-specific library dependencies
-#[cfg(target_os = "macos")] extern crate byteorder;
-#[cfg(target_os = "macos")] extern crate core_foundation;
-#[cfg(target_os = "macos")] extern crate core_graphics;
-#[cfg(target_os = "macos")] extern crate core_text;
-
-// Windows-specific library dependencies
-#[cfg(target_os = "windows")] extern crate dwrote;
-#[cfg(target_os = "windows")] extern crate truetype;
-
-#[cfg(target_os = "linux")]
-extern crate fontconfig;
-//extern crate fontsan;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate freetype;
-extern crate harfbuzz_sys as harfbuzz;
-
-extern crate heapsize;
-#[macro_use] extern crate heapsize_derive;
-//extern crate ipc_channel;
-#[macro_use]
-extern crate lazy_static;
 extern crate libc;
+extern crate gleam;
+extern crate glutin;
+extern crate serde;
 #[macro_use]
-extern crate log;
-extern crate ordered_float;
-#[macro_use] extern crate serde;
-#[cfg(any(target_feature = "sse2", target_feature = "neon"))]
-extern crate simd;
-extern crate smallvec;
-extern crate unicode_bidi;
-extern crate unicode_script;
-extern crate xi_unicode;
-#[cfg(target_os = "android")]
-extern crate xml5ever;
-extern crate num_traits;
-extern crate string_cache;
+extern crate serde_derive;
+extern crate serde_json;
 
 extern crate euclid;
 extern crate app_units;
-extern crate gleam;
-extern crate glutin;
+
+extern crate servo_arc;
+extern crate ipc_channel;
+extern crate range;
+extern crate style;
+extern crate net_traits;
+extern crate gfx;
+
+extern crate unicode_bidi;
+extern crate unicode_script;
+extern crate ordered_float;
+
 extern crate webrender;
 extern crate webrender_api;
 
 
-#[macro_use]
-mod range;
-mod atoms;
-#[macro_use]
-mod font;
-mod font_template;
-mod platform;
-mod text;
+pub mod fake_resource_thread;
+pub mod serde_event;
 
-use libc::{c_char, uint32_t, int32_t, size_t};
-use std::ffi::CStr;
 use std::slice;
 use std::mem;
-use webrender_api::{PipelineId,GlyphInstance,RenderNotifier,
-                    DeviceUintSize,DeviceUintPoint,DeviceUintRect,
-                    ResourceUpdates,Epoch,
-                    LayoutSize,LayoutRect,LayoutPoint,
-                    ColorF,BorderWidths,BorderDetails,
-                    NormalBorder,BorderSide,BorderRadius,
-                    LocalClip, ComplexClipRegion};
+use std::rc::Rc;
+use std::cell::RefCell;
+use libc::{c_char, uint32_t, int32_t, size_t};
+use std::ffi::{CStr,CString};
 use gleam::gl;
-use app_units::Au;
-use atoms::Atom;
 
+use app_units::Au;
+use servo_arc::Arc as ServoArc;
+use std::sync::Mutex;
+
+use style::Atom;
+use style::properties::style_structs::Font as FontStyle;
+use gfx::font_context;
+use gfx::font_context::FontContext;
+use gfx::font_cache_thread::FontCacheThread;
+use gfx::text;
+use gfx::font;
+use gfx::font::Font;
+
+use webrender_api::{DocumentId, PipelineId, RenderApi, GlyphInstance,
+                    RenderNotifier, DeviceUintSize, DeviceUintPoint,
+                    DeviceUintRect, ResourceUpdates, Epoch,
+                    LayoutSize, LayoutRect, LayoutPoint, ColorF,
+                    BorderWidths, BorderDetails, NormalBorder,
+                    BorderSide, BorderRadius, PrimitiveInfo,
+                    EdgeAaSegmentMask, LocalClip, ComplexClipRegion,
+                    ClipMode};
+
+// used as render notifier
 pub struct WRWindow {
     window_proxy: glutin::WindowProxy,
 }
@@ -98,14 +74,18 @@ impl WRWindow {
 }
 
 impl RenderNotifier for WRWindow {
-    fn new_frame_ready(&mut self) {
+    fn new_frame_ready(&self) {
         // maybe #[cfg(not(target_os = "android"))] ?
         self.window_proxy.wakeup_event_loop();
     }
 
-    fn new_scroll_frame_ready(&mut self, _composite_needed: bool) {
+    fn new_scroll_frame_ready(&self, _composite_needed: bool) {
         // and here
         self.window_proxy.wakeup_event_loop();
+    }
+    
+    fn clone(&self) -> Box<RenderNotifier> {
+        Box::new(WRWindow::new(self.window_proxy.clone()))
     }
 }
 
@@ -118,13 +98,23 @@ type RenderFunction = unsafe extern "C" fn(*mut DisplayListBuilder, f32, f32) ->
 /// pressed, negative for released. The absolute value is the button.
 type MouseHandler = unsafe extern "C" fn(f32, f32, int32_t) -> ();
 
+pub struct WRUIWindow {
+    renderer: webrender::Renderer,
+    api: RenderApi,
+    font_context: ServoArc<Mutex<FontContext>>,
+    document: DocumentId,
+    window: glutin::Window,
+    epoch: Epoch,
+    last_size: usize,
+}
+
 /// Create an object for a window. This should be passed a function to
 /// handle events for the window and a function to generate a display
 /// list.
 #[no_mangle]
 pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t,
                          render: RenderFunction,
-                         mouse:  MouseHandler) -> () {
+                         mouse:  MouseHandler) -> *mut WRUIWindow {
     let title = unsafe {
         if title.is_null() {
             None
@@ -169,59 +159,35 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
         ..Default::default()
     };
 
-    let (mut renderer, sender) = webrender::Renderer::new(gl, options).unwrap();
+    let (mut renderer, sender) = webrender::Renderer::new(
+        gl,
+        Box::new(WRWindow::new(window.create_window_proxy())),
+        options).unwrap();
+
+    let fake_resource_thread = fake_resource_thread::new_fake_resource_thread();
+    let font_cache_thread = FontCacheThread::new(fake_resource_thread, sender.create_api());
+
     let api = sender.create_api();
     let (width, height) = window.get_inner_size_pixels().unwrap();
+    
     let size = DeviceUintSize::new(width, height);
     let document_id = api.add_document(size);
     let pipeline_id = PipelineId(0,0);
 
     api.set_root_pipeline(document_id, pipeline_id);
-    renderer.set_render_notifier(Box::new(WRWindow::new(window.create_window_proxy())));
 
-    //set up a font
-    //todo: should probably look for best template match and try to use the font the system wants.
-    let fc = platform::font_context::FontContextHandle::new();
-    let mut have_match = false;
-    let mut template_data = None;
-    let desc = font_template::FontTemplateDescriptor::new(
-        font_template::font_weight::T::normal(),
-        font_template::font_stretch::T::normal,
-        false);
-    platform::font_list::for_each_variation("DejaVu Sans", |variation| {
-        if have_match { return; }
-        let template = font_template::FontTemplate::new(Atom::from(&*variation), None);
-        match template {
-            Err(_) => (),
-            Ok(mut template) => {
-                match template.data_for_descriptor(&fc, &desc) {
-                    None => (),
-                    x => { have_match = true; template_data = x; }
-                }
-            }
-        }
-    });
-    if template_data.is_none() { panic!("Can't find font DejaVu Sans"); }
-    let fdtemplate = template_data.unwrap();
-    let key = api.generate_font_key();
-    let updates = {
-        let mut u = ResourceUpdates::new();
-        let temp = &*fdtemplate;
-        match temp.native_font() {
-            Some(x) => u.add_native_font(key.clone(), x),
-            None => u.add_raw_font(key.clone(), temp.bytes(), 0),
-        }
-        u
+    let mut win = WRUIWindow {
+        renderer: renderer,
+        api: api,
+        font_context: ServoArc::new(Mutex::new(FontContext::new(font_cache_thread))),
+        document: document_id,
+        window: window,
+        epoch: Epoch(0),
+        last_size: 0,
     };
-    api.update_resources(updates);
-    let pt_size = Au::from_px(20);
-    let handle = font::FontHandleMethods::new_from_template(&fc, fdtemplate, Some(pt_size));
-    if handle.is_err() { panic!("Couldn't get font handle for Cantarell"); }
-    let handle = handle.unwrap();
-    let mut font = font::Font::new(handle, font_template::font_variant_caps::T::normal,
-                               desc, pt_size, pt_size, key);
-    let mut data_estimate = None;
-    
+
+    Box::into_raw(Box::new(win))
+    /*
     let mut epoch = Epoch(0);
     'event_loop: for event in window.wait_events() {
         let mut events = Vec::new();
@@ -305,21 +271,131 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
     renderer.deinit();
     window.hide();
 //    window.close(); // ??
+    */
+}
 
+// TODO: close/free window
+
+#[no_mangle]
+pub extern fn wrui_get_event_json(win: *mut WRUIWindow, block: i32) -> *mut c_char {
+    let window = unsafe {
+        assert!(!win.is_null());
+        &mut (*win).window
+    };
+    let event = if block != 0 {
+        window.wait_events().next()
+    } else {
+        window.poll_events().next()
+    };
+    let str = serde_json::to_string(&event.map(serde_event::SerializableEvent))
+        .ok().unwrap_or(String::from(""));
+    let c_str = CString::new(str).unwrap();
+    c_str.into_raw()
+}
+
+#[no_mangle]
+pub extern fn wrui_get_event_sexp(win: *mut WRUIWindow, block: i32) -> *mut c_char {
+    use serde::Serialize;
+    let window = unsafe {
+        assert!(!win.is_null());
+        &mut (*win).window
+    };
+    let event = if block != 0 {
+        window.wait_events().next()
+    } else {
+        window.poll_events().next()
+    };
+    let x = event.map(serde_event::SerializableEvent);
+    let mut writer = Vec::with_capacity(128);
+    let c_str = match x.serialize(&mut serde_event::SExprSerializer::new(&mut writer)) {
+        Ok(_) => unsafe { CString::from_vec_unchecked(writer) },
+        Err(_) => CString::new("").unwrap(),
+    };
+    c_str.into_raw()
+}
+
+#[no_mangle]
+pub extern fn wrui_free_event(s: *mut c_char) -> () {
+    unsafe {
+        if !s.is_null() {
+            CString::from_raw(s);
+        }
+    }
 }
 
 pub struct DisplayListBuilder {
     builder: webrender_api::DisplayListBuilder,
-    font: font::Font,
+    font_context: ServoArc<Mutex<FontContext>>,
+    epoch: Epoch,
 }
 
 impl DisplayListBuilder {
-    fn new(dlb: webrender_api::DisplayListBuilder, font: font::Font) -> DisplayListBuilder {
+    fn new(dlb: webrender_api::DisplayListBuilder, font_context: ServoArc<Mutex<FontContext>>,
+           epoch: Epoch)
+           -> DisplayListBuilder {
         DisplayListBuilder {
             builder: dlb,
-            font: font,
+            font_context: font_context,
+            epoch: epoch,
         }
     }
+}
+
+#[no_mangle]
+pub extern fn wrui_display_list_builder(window: *mut WRUIWindow) -> *mut DisplayListBuilder {
+    let win = unsafe {
+        assert!(!window.is_null());
+        &mut *window
+    };
+    let window = &win.window;
+    let (lwidth, lheight) = window.get_inner_size_points().unwrap();
+    let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
+
+    let mut dlb = DisplayListBuilder::new(
+        webrender_api::DisplayListBuilder::with_capacity(PipelineId(0,0), lsize, win.last_size),
+        win.font_context.clone(),
+        win.epoch);
+    Box::into_raw(Box::new(dlb))
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_free(ptr: *mut DisplayListBuilder) -> () {
+    if !ptr.is_null() {
+        unsafe {
+            Box::from_raw(ptr);
+        }
+    }
+}
+
+pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut DisplayListBuilder) -> () {
+    let win = unsafe {
+        assert!(!window.is_null());
+        &mut *window
+    };
+    let dlb = unsafe {
+        assert!(!ptr.is_null());
+        Box::from_raw(ptr)
+    };
+
+    let (dwidth, dheight) = win.window.get_inner_size_pixels().unwrap();
+    let dsize = DeviceUintSize::new(dwidth, dheight);
+    let (lwidth, lheight) = win.window.get_inner_size_points().unwrap();
+    let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
+
+    win.last_size = dlb.builder.data.len();
+    win.epoch = Epoch(win.epoch.0 + 1);
+    win.api.set_display_list(win.document,
+                             dlb.epoch,
+                             None,
+                             lsize,
+                             dlb.builder.finalize(),
+                             false,
+                             ResourceUpdates::new());
+    win.api.generate_frame(win.document, None);
+    win.renderer.update();
+    win.renderer.render(dsize);
+    win.window.swap_buffers().ok();
+    unsafe { Box::from_raw(ptr); }
 }
 
 pub struct ShapedText {
@@ -336,26 +412,6 @@ impl ShapedText {
     }
 }
 
-/*
-#[no_mangle]
-pub extern fn display_list_builder_new() -> *mut DisplayListBuilder {
-    //FIXME: get the right parameters
-    let builder = webrender_api::DisplayListBuilder::new(PipelineId(0,0), LayoutSize::new(100.0,100.0));
-    let builder
-    Box::into_raw(Box::new(builder))
-}
-//TODO: ...new_with_capacity
-*/
-
-#[no_mangle]
-pub extern fn display_list_builder_free(ptr: *mut DisplayListBuilder) -> () {
-    if !ptr.is_null() {
-        unsafe {
-            Box::from_raw(ptr);
-        }
-    }
-}
-
 fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
     LayoutRect::new(LayoutPoint::new(x,y), LayoutSize::new(w,h))
 }
@@ -364,10 +420,13 @@ fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
 /// # with_clip!{
 /// #   display_list_builder_push_name, display_list_builder_push_name_c,
 /// #   display_list_builder_push_name_cc,
-/// #   fn (dlb, localClip, args...) -> result {
+/// #   fn (dlb, primitive_info, args...) -> result {
 /// #     body
 /// #   }
 /// # }
+///
+/// the macro mutably binds `primitive_info` to function that takes a rect and returns the
+/// appropriate PrimitiveInfo struct. (i.e. fn primitive_info(x: LayoutRect) -> PrimitiveInfo)
 ///
 /// generates public external non-mangled functions:
 /// # display_list_builder_push_name(ptr: *mut DisplayListBuilder, args...)
@@ -380,7 +439,8 @@ fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
 /// #                                   args...)
 macro_rules! with_clip {
     ($name:ident , $namec:ident , $namecc:ident ,
-     fn ( $dlb:ident , $local_clip:ident , $($arg:ident : $argt:ty),* ) -> $result:ty $body:block) =>
+     fn ( $dlb:ident , $primitive_info:ident , $($arg:ident : $argt:ty),* )
+          -> $result:ty $body:block) =>
     {
         #[no_mangle]
         pub extern fn $name(ptr: *mut DisplayListBuilder, $($arg : $argt),*) -> $result {
@@ -388,7 +448,15 @@ macro_rules! with_clip {
                 assert!(!ptr.is_null());
                 &mut *ptr
             };
-            let $local_clip = None;
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::from(rect),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: None,
+                }
+            };
             $body
         }
         #[no_mangle]
@@ -398,7 +466,15 @@ macro_rules! with_clip {
                 assert!(!ptr.is_null());
                 &mut *ptr
             };
-            let $local_clip = Some(LocalClip::from(layout_rect(cx,cy,cw,ch)));
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::from(layout_rect(cx,cy,cw,ch)),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: None,
+                }
+            };
             $body
         }
         #[no_mangle]
@@ -411,11 +487,20 @@ macro_rules! with_clip {
                 assert!(!ptr.is_null());
                 &mut *ptr
             };
-            let $local_clip = Some(LocalClip::RoundedRect(
-                layout_rect(cx, cy, cw, ch),
-                ComplexClipRegion::new(layout_rect(ccx, ccy, ccw, cch),
-                                       border_radius(cctlw, cctlh, cctrw, cctrh,
-                                                     ccblw, ccblh, ccbrw, ccbrh))));
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::RoundedRect(
+                        layout_rect(cx, cy, cw, ch),
+                        ComplexClipRegion::new(layout_rect(ccx, ccy, ccw, cch),
+                                               border_radius(cctlw, cctlh, cctrw, cctrh,
+                                                             ccblw, ccblh, ccbrw, ccbrh),
+                                               ClipMode::Clip)),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: None,
+                }
+            };
             $body
         }
     }
@@ -425,10 +510,10 @@ with_clip! {
     display_list_builder_push_rect,
     display_list_builder_push_rect_c,
     display_list_builder_push_rect_cc,
-    fn (dlb, local_clip,
+    fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32,
         r: f32, g: f32, b: f32, a: f32) -> () {
-        dlb.builder.push_rect(layout_rect(x,y,w,h), local_clip, ColorF::new(r,g,b,a));
+        dlb.builder.push_rect(&primitive_info(layout_rect(x,y,w,h)), ColorF::new(r,g,b,a));
     }
 }
 
@@ -478,7 +563,7 @@ with_clip! {
     display_list_builder_push_border_n,
     display_list_builder_push_border_nc,
     display_list_builder_push_border_ncc,
-    fn (dlb, local_clip,
+    fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32,
         leftw: f32, topw: f32, rightw: f32, bottomw: f32,
         lr: f32, lg: f32, lb: f32, la: f32, ls: BorderStyle,
@@ -487,7 +572,7 @@ with_clip! {
         br: f32, bg: f32, bb: f32, ba: f32, bs: BorderStyle,
         tlw: f32, tlh: f32, trw: f32, trh: f32,
         blw: f32, blh: f32, brw: f32, brh: f32) -> () {
-        dlb.builder.push_border(layout_rect(x,y,w,h), local_clip,
+        dlb.builder.push_border(&primitive_info(layout_rect(x,y,w,h)),
                                 BorderWidths { left: leftw, top: topw, right: rightw, bottom: bottomw },
                                 BorderDetails::Normal(NormalBorder {
                                     left:   b(lr,lg,lb,la,ls),
@@ -506,16 +591,98 @@ with_clip! {
     }
 }
 
+
+/// Get a reference to an object representing the properties required of the font.
+///
+/// family: the family name
+/// size: font size
+/// italic: should the font be slanted (italic or oblique)
+/// weight: boldness. 400 is normal, 700 is bold, etc.
+/// stretch: stretchiness. 1 is ultra_condensed, 5 is normal, 9 is ultra_expanded
+fn describe_font(family: &str, size: Au, italic: bool, weight: u16, stretch: u8) -> ServoArc<FontStyle> {
+    use style::computed_values::{font_stretch, font_weight, font_variant_caps, font_style};
+    use style::computed_values::font_family;
+    use style::computed_values::font_family::{FontFamily, FamilyName, FamilyNameSyntax, FontFamilyList};
+    use style::values::computed::font::FontSize;
+    use style::values::computed::length::NonNegativeLength;
+    let mut res = FontStyle {
+        font_family: font_family::T(FontFamilyList::new(vec![
+            FontFamily::FamilyName(FamilyName {
+                name: Atom::from(family),
+                syntax: FamilyNameSyntax::Quoted,
+            })])),
+        font_style: if italic { font_style::T::italic } else { font_style::T::normal },
+        font_variant_caps: font_variant_caps::T::normal,
+        font_weight: font_weight::T::from_gecko_weight(weight),
+        font_size: FontSize {
+            size: NonNegativeLength::from(size), keyword_info: None
+        },
+        font_stretch: match stretch {
+            1 => font_stretch::T::ultra_condensed,
+            2 => font_stretch::T::extra_condensed,
+            3 => font_stretch::T::condensed,
+            4 => font_stretch::T::semi_condensed,
+            5 => font_stretch::T::normal,
+            6 => font_stretch::T::semi_expanded,
+            7 => font_stretch::T::expanded,
+            8 => font_stretch::T::extra_expanded,
+            9 => font_stretch::T::ultra_expanded,
+            _ => font_stretch::T::normal
+        },
+        hash: 0
+    };
+    res.compute_font_hash();
+    ServoArc::new(res)
+}
+
+type WRUIFont = Rc<RefCell<Font>>;
+
+fn get_font(font_context: &mut FontContext,
+            family: &str, size: Au, italic: bool, weight: u16, stretch: u8) -> WRUIFont {
+    let fonts = font_context.layout_font_group_for_style(
+        describe_font(family, size, italic, weight, stretch));
+    fonts.fonts[0].clone()
+}
+
+
+#[no_mangle]
+pub extern fn wrui_find_font(dlb: *mut DisplayListBuilder,
+                             family: &str, ptsize: f32, italic: bool, weight: u16, stretch: u8)
+                             -> *mut WRUIFont {
+    use std::borrow::Borrow;
+    let dlb = unsafe {
+        assert!(!dlb.is_null());
+        &mut *dlb
+    };
+    let fc : &Mutex<FontContext> = dlb.font_context.borrow();
+    let font = get_font(&mut fc.lock().unwrap(), family, Au::from_f32_px(ptsize),
+                        italic, weight, stretch);
+    Box::into_raw(Box::new(font))
+}
+
+pub extern fn wrui_free_font(font: *mut WRUIFont) -> () {
+    if !font.is_null() {
+        unsafe {
+            Box::from_raw(font);
+        }
+    }
+}
+
 with_clip! {
     display_list_builder_push_text,
     display_list_builder_push_text_c,
     display_list_builder_push_text_cc,
-    fn (dlb, local_clip,
+    fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32, // box containing text
+        font: *mut WRUIFont,
         r: f32, g: f32, b: f32, a: f32,
         x0: f32, y0: f32, //origin of first character
         text: *const c_char) -> () {
-        
+
+        let font = unsafe {
+            assert!(!font.is_null());
+            &mut *font
+        };
         let text = unsafe {
             assert!(!text.is_null());
             CStr::from_ptr(text).to_str().unwrap()
@@ -524,12 +691,13 @@ with_clip! {
         //first shape text
         let options = font::ShapingOptions {
             letter_spacing: None,
-            // word spacing is (fixed amount, % of width of ' ')
+            // word spacing is (fixed amount + % of width of ' ')
             word_spacing: (Au::new(0), ordered_float::NotNaN::new(1.0).unwrap()),
             script: unicode_script::Script::Unknown,
             flags: font::ShapingFlags::empty(),
         };
-        let run = text::TextRun::new(&mut dlb.font, text.to_string(), &options, unicode_bidi::Level::ltr());
+        let run = text::TextRun::new(&mut font.borrow_mut(),
+                                     text.to_string(), &options, unicode_bidi::Level::ltr());
         let len: text::glyph::ByteIndex =
             run.glyphs.iter().fold(text::glyph::ByteIndex(0),
                                    |sum, x| sum + x.range.length());
@@ -553,20 +721,19 @@ with_clip! {
                 origin.x = origin.x + advance;
             }
         }
-        dlb.builder.push_text(layout_rect(x,y,w,h), local_clip,
+        dlb.builder.push_text(&primitive_info(layout_rect(x,y,w,h)),
                               &glyphs, run.font_key,
                               ColorF::new(r,g,b,a),
-                              run.actual_pt_size,
                               None);
     }
 }
 
 #[no_mangle]
-pub extern fn display_list_builder_shape_text(ptr: *mut DisplayListBuilder,
-                                              text: *const c_char) -> *mut ShapedText {
-   let dlb = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
+pub extern fn wrui_shape_text(font: *mut WRUIFont,
+                              text: *const c_char) -> *mut ShapedText {
+    let font = unsafe {
+        assert!(!font.is_null());
+        &mut *font
     };
     let text = unsafe {
         assert!(!text.is_null());
@@ -581,7 +748,8 @@ pub extern fn display_list_builder_shape_text(ptr: *mut DisplayListBuilder,
         script: unicode_script::Script::Unknown,
         flags: font::ShapingFlags::empty(),
     };
-    let run = text::TextRun::new(&mut dlb.font, text.to_string(), &options, unicode_bidi::Level::ltr());
+    let run = text::TextRun::new(&mut font.borrow_mut(), text.to_string(),
+                                 &options, unicode_bidi::Level::ltr());
     let len: text::glyph::ByteIndex =
         run.glyphs.iter().fold(text::glyph::ByteIndex(0),
                                |sum, x| sum + x.range.length());
@@ -591,7 +759,7 @@ pub extern fn display_list_builder_shape_text(ptr: *mut DisplayListBuilder,
 }
 
 #[no_mangle]
-pub extern fn shaped_text_free(text: *mut ShapedText) -> () {
+pub extern fn wrui_free_shaped_text(text: *mut ShapedText) -> () {
     let _ = unsafe {
         Box::from_raw(text)
     };
@@ -646,7 +814,7 @@ with_clip! {
     display_list_builder_push_shaped_text,
     display_list_builder_push_shaped_text_c,
     display_list_builder_push_shaped_text_cc,
-    fn (dlb, local_clip,
+    fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32, // box containing text
         r: f32, g: f32, b: f32, a: f32,
         text: *mut ShapedText,
@@ -679,10 +847,9 @@ with_clip! {
                 origin.x = origin.x + advance;
             }
         }
-        dlb.builder.push_text(layout_rect(x,y,w,h), local_clip,
+        dlb.builder.push_text(&primitive_info(layout_rect(x,y,w,h)),
                               &glyphs, text.run.font_key,
                               ColorF::new(r,g,b,a),
-                              text.run.actual_pt_size,
                               None);
     }
 }

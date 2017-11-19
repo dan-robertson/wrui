@@ -14,13 +14,13 @@ pub fn new_fake_resource_thread() -> CoreResourceThread {
     thread::Builder::new().name("FakeResourceManager".to_owned()).spawn(move || {
         loop {
             match recv.recv() {
-                Err(e) => (), // don't really care
-                Ok(x) => {
+                Err(_) => (), // don't really care
+                Ok(_) => {
                     // perhaps we could emulate dns errors or offline errors but what's the point
                     panic!("Not really a resource manager");
                 }
             }
         }
-    });
+    }).unwrap();
     send
 }
