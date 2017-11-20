@@ -315,7 +315,6 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
     let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
 
     win.last_size = dlb.builder.data.len();
-    println!("{} {:?}", win.last_size, win.document);
     win.epoch = Epoch(win.epoch.0 + 1);
     win.api.set_display_list(win.document,
                              dlb.epoch,
@@ -324,15 +323,10 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
                              dlb.builder.finalize(),
                              false,
                              ResourceUpdates::new());
-    println!("set");
     win.api.generate_frame(win.document, None);
-    println!("gen");
     win.renderer.update();
-    println!("upd");
     win.renderer.render(dsize);
-    println!("ren");
     win.window.swap_buffers().ok();
-    println!("swp");
 }
 
 pub struct ShapedText {
