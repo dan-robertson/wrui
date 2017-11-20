@@ -112,9 +112,8 @@ pub struct WRUIWindow {
 /// handle events for the window and a function to generate a display
 /// list.
 #[no_mangle]
-pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t,
-                         render: RenderFunction,
-                         mouse:  MouseHandler) -> *mut WRUIWindow {
+pub extern fn wrui_new_window(title: *const c_char, width: uint32_t, height: uint32_t)
+                              -> *mut WRUIWindow {
     let title = unsafe {
         if title.is_null() {
             None
@@ -187,91 +186,23 @@ pub extern fn new_window(title: *const c_char, width: uint32_t, height: uint32_t
     };
 
     Box::into_raw(Box::new(win))
-    /*
-    let mut epoch = Epoch(0);
-    'event_loop: for event in window.wait_events() {
-        let mut events = Vec::new();
-        events.push(event);
-        for event in window.poll_events() {
-            events.push(event);
-        }
-        for event in events {
-            match event {
-                glutin::Event::Closed |
-                glutin::Event::KeyboardInput(_,_,Some(glutin::VirtualKeyCode::Escape)) 
-                    => break 'event_loop,
-                glutin::Event::Awakened => {
-                },
-                glutin::Event::MouseMoved(x,y) => {
-                    unsafe {
-                        let f = window.hidpi_factor();
-                        mouse(x as f32 / f, y as f32 / f, 0);
-                    }
-                },
-                glutin::Event::MouseInput(s,b,place) => {
-                    unsafe {
-                        let f = window.hidpi_factor();
-                        // this is not very nice. Total hack
-                        let (x,y) = place.unwrap_or((-99999,-99999));
-                        let (x,y) = (x as f32 / f, y as f32 / f);
-                        mouse(x, y,
-                              match s {
-                                  glutin::ElementState::Pressed => 1,
-                                  glutin::ElementState::Released => -1,
-                              } * match b {
-                                  glutin::MouseButton::Left => 1,
-                                  glutin::MouseButton::Right => 2,
-                                  glutin::MouseButton::Middle => 3,
-                                  glutin::MouseButton::Other(n) => 4+n as i32,
-                              });
-                    }
-                },
-                _ => println!("{:#?}", event),
-            }
-        }
-        
-        // get window dimensions
-        let (width, height) = window.get_inner_size_pixels().unwrap();
-        let size = DeviceUintSize::new(width, height);
-        let (lwidth, lheight) = window.get_inner_size_points().unwrap();
-        let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
-
-        // set up DisplayListBuilder
-        let mut dlb = DisplayListBuilder::new(
-            match data_estimate {
-                None => webrender_api::DisplayListBuilder::new(pipeline_id, lsize),
-                Some(n) => webrender_api::DisplayListBuilder::with_capacity(pipeline_id, lsize, n),
-            },
-            font);
-        // generate display list
-        unsafe {
-            let ptr: *mut DisplayListBuilder = &mut dlb;
-            render(ptr,lwidth as f32, lheight as f32);
-        };
-        data_estimate = Some(dlb.builder.data.len());
-
-        api.set_display_list(document_id,
-                             epoch,
-                             Some(ColorF::new(0.0,0.0,0.0,1.0)),
-                             lsize,
-                             dlb.builder.finalize(),
-                             false,
-                             ResourceUpdates::new());
-        api.generate_frame(document_id, None);
-        renderer.update();
-        api.set_window_parameters(document_id, size,
-                                  DeviceUintRect::new(DeviceUintPoint::zero(), size));
-        renderer.render(size);
-        window.swap_buffers().ok();
-        font = dlb.font;
-        {let Epoch(n) = epoch; epoch = Epoch(n+1)}
-    }
-
+/*
     api.shut_down();
     renderer.deinit();
     window.hide();
 //    window.close(); // ??
     */
+}
+
+#[no_mangle]
+pub extern fn wrui_close_window(win: *mut WRUIWindow) -> () {
+    let win = unsafe {
+        if win.is_null() { return; }
+        Box::from_raw(win)
+    };
+    win.api.shut_down();
+    win.window.hide();
+    win.renderer.deinit();
 }
 
 // TODO: close/free window
@@ -367,6 +298,7 @@ pub extern fn display_list_builder_free(ptr: *mut DisplayListBuilder) -> () {
     }
 }
 
+#[no_mangle]
 pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut DisplayListBuilder) -> () {
     let win = unsafe {
         assert!(!window.is_null());
@@ -383,6 +315,7 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
     let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
 
     win.last_size = dlb.builder.data.len();
+    println!("{} {:?}", win.last_size, win.document);
     win.epoch = Epoch(win.epoch.0 + 1);
     win.api.set_display_list(win.document,
                              dlb.epoch,
@@ -391,11 +324,15 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
                              dlb.builder.finalize(),
                              false,
                              ResourceUpdates::new());
+    println!("set");
     win.api.generate_frame(win.document, None);
+    println!("gen");
     win.renderer.update();
+    println!("upd");
     win.renderer.render(dsize);
+    println!("ren");
     win.window.swap_buffers().ok();
-    unsafe { Box::from_raw(ptr); }
+    println!("swp");
 }
 
 pub struct ShapedText {
@@ -647,7 +584,7 @@ fn get_font(font_context: &mut FontContext,
 
 #[no_mangle]
 pub extern fn wrui_find_font(dlb: *mut DisplayListBuilder,
-                             family: &str, ptsize: f32, italic: bool, weight: u16, stretch: u8)
+                             family: &str, ptsize: f32, italic: i32, weight: u16, stretch: u8)
                              -> *mut WRUIFont {
     use std::borrow::Borrow;
     let dlb = unsafe {
@@ -656,10 +593,11 @@ pub extern fn wrui_find_font(dlb: *mut DisplayListBuilder,
     };
     let fc : &Mutex<FontContext> = dlb.font_context.borrow();
     let font = get_font(&mut fc.lock().unwrap(), family, Au::from_f32_px(ptsize),
-                        italic, weight, stretch);
+                        italic != 0, weight, stretch);
     Box::into_raw(Box::new(font))
 }
 
+#[no_mangle]
 pub extern fn wrui_free_font(font: *mut WRUIFont) -> () {
     if !font.is_null() {
         unsafe {
