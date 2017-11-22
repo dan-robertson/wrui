@@ -89,15 +89,6 @@ impl RenderNotifier for WRWindow {
     }
 }
 
-/// A function, given a display list and the (layout) width and height
-/// of the are to display, which builds the display list
-type RenderFunction = unsafe extern "C" fn(*mut DisplayListBuilder, f32, f32) -> ();
-/// A function called for every mouse event. The first two parameters
-/// are the (x,y) coordinates. The third represents the button
-/// pressed: 0 if no button was pressed/released, positive for
-/// pressed, negative for released. The absolute value is the button.
-type MouseHandler = unsafe extern "C" fn(f32, f32, int32_t) -> ();
-
 pub struct WRUIWindow {
     renderer: webrender::Renderer,
     api: RenderApi,
@@ -105,7 +96,8 @@ pub struct WRUIWindow {
     document: DocumentId,
     window: glutin::Window,
     epoch: Epoch,
-    last_size: usize,
+    last_dl_length: usize,
+    last_window_size: DeviceUintSize,
 }
 
 /// Create an object for a window. This should be passed a function to
@@ -182,7 +174,8 @@ pub extern fn wrui_new_window(title: *const c_char, width: uint32_t, height: uin
         document: document_id,
         window: window,
         epoch: Epoch(0),
-        last_size: 0,
+        last_dl_length: 0,
+        last_window_size: size,
     };
 
     Box::into_raw(Box::new(win))
@@ -273,17 +266,22 @@ impl DisplayListBuilder {
 }
 
 #[no_mangle]
-pub extern fn wrui_display_list_builder(window: *mut WRUIWindow) -> *mut DisplayListBuilder {
+pub extern fn wrui_display_list_builder(window: *mut WRUIWindow, width: *mut f32, height: *mut f32) -> *mut DisplayListBuilder {
     let win = unsafe {
         assert!(!window.is_null());
+        assert!(!width.is_null());
+        assert!(!height.is_null());
         &mut *window
     };
     let window = &win.window;
     let (lwidth, lheight) = window.get_inner_size_points().unwrap();
     let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
-
+    unsafe {
+        *width = lwidth as f32;
+        *height = lheight as f32;
+    }
     let mut dlb = DisplayListBuilder::new(
-        webrender_api::DisplayListBuilder::with_capacity(PipelineId(0,0), lsize, win.last_size),
+        webrender_api::DisplayListBuilder::with_capacity(PipelineId(0,0), lsize, win.last_dl_length),
         win.font_context.clone(),
         win.epoch);
     Box::into_raw(Box::new(dlb))
@@ -313,12 +311,19 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
     let dsize = DeviceUintSize::new(dwidth, dheight);
     let (lwidth, lheight) = win.window.get_inner_size_points().unwrap();
     let lsize = LayoutSize::new(lwidth as f32, lheight as f32);
-
-    win.last_size = dlb.builder.data.len();
+    if dsize != win.last_window_size {
+        win.last_window_size = dsize;
+        win.api.set_window_parameters(win.document, dsize,
+                                      DeviceUintRect::new(
+                                          DeviceUintPoint::zero(),
+                                          dsize),
+                                      win.window.hidpi_factor());
+    }
+    win.last_dl_length = dlb.builder.data.len();
     win.epoch = Epoch(win.epoch.0 + 1);
     win.api.set_display_list(win.document,
                              dlb.epoch,
-                             None,
+                             Some(ColorF::new(1.0, 1.0, 1.0, 1.0)),
                              lsize,
                              dlb.builder.finalize(),
                              false,
@@ -536,6 +541,7 @@ fn describe_font(family: &str, size: Au, italic: bool, weight: u16, stretch: u8)
     use style::computed_values::font_family::{FontFamily, FamilyName, FamilyNameSyntax, FontFamilyList};
     use style::values::computed::font::FontSize;
     use style::values::computed::length::NonNegativeLength;
+
     let mut res = FontStyle {
         font_family: font_family::T(FontFamilyList::new(vec![
             FontFamily::FamilyName(FamilyName {
@@ -578,17 +584,24 @@ fn get_font(font_context: &mut FontContext,
 
 #[no_mangle]
 pub extern fn wrui_find_font(dlb: *mut DisplayListBuilder,
-                             family: &str, ptsize: f32, italic: i32, weight: u16, stretch: u8)
+                             family: *const c_char, ptsize: f32, italic: i32,
+                             weight: u16, stretch: u8)
                              -> *mut WRUIFont {
     use std::borrow::Borrow;
     let dlb = unsafe {
         assert!(!dlb.is_null());
         &mut *dlb
     };
+    let family = unsafe {
+        assert!(!family.is_null());
+        CStr::from_ptr(family).to_str().unwrap()
+    };
+
     let fc : &Mutex<FontContext> = dlb.font_context.borrow();
     let font = get_font(&mut fc.lock().unwrap(), family, Au::from_f32_px(ptsize),
                         italic != 0, weight, stretch);
-    Box::into_raw(Box::new(font))
+    let f = Box::into_raw(Box::new(font));
+    f
 }
 
 #[no_mangle]
