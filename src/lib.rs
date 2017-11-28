@@ -58,7 +58,7 @@ use webrender_api::{DocumentId, PipelineId, RenderApi, GlyphInstance,
                     BorderWidths, BorderDetails, NormalBorder,
                     BorderSide, BorderRadius, PrimitiveInfo,
                     EdgeAaSegmentMask, LocalClip, ComplexClipRegion,
-                    ClipMode};
+                    ClipMode, ClipId, ScrollSensitivity};
 
 // used as render notifier
 pub struct WRWindow {
@@ -355,7 +355,8 @@ fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
 
 /// # with_clip!{
 /// #   display_list_builder_push_name, display_list_builder_push_name_c,
-/// #   display_list_builder_push_name_cc,
+/// #   display_list_builder_push_name_cc, display_list_builder_push_name_t
+/// #   display_list_builder_push_name_tc, display_list_builder_push_name_tcc,
 /// #   fn (dlb, primitive_info, args...) -> result {
 /// #     body
 /// #   }
@@ -373,13 +374,22 @@ fn layout_rect(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
 /// #                                   cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
 /// #                                   ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
 /// #                                   args...)
+/// # display_list_builder_push_name_t(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8, args...)
+/// # display_list_builder_push_name_tc(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8,
+/// #                                   cx:f32, cy:f32, cw:f32, ch:f32,
+/// #                                   args...)
+/// # display_list_builder_push_name_tcc(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8,
+/// #                                    cx:f32, cy:f32, cw:f32, ch:f32,
+/// #                                    ccx: f32, ccy: f32, ccw: f32, cch: f32,
+/// #                                    cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
+/// #                                    ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
+/// #                                    args...)
 macro_rules! with_clip {
-    ($name:ident , $namec:ident , $namecc:ident ,
+    ($name:ident , $namec:ident , $namecc:ident , $namet:ident , $nametc:ident , $nametcc:ident ,
      fn ( $dlb:ident , $primitive_info:ident , $($arg:ident : $argt:ty),* )
           -> $result:ty $body:block) =>
     {
-        #[no_mangle]
-        pub extern fn $name(ptr: *mut DisplayListBuilder, $($arg : $argt),*) -> $result {
+        with_clip!{ fn $name(ptr: *mut DisplayListBuilder, $($arg : $argt),*) -> $result {
             let $dlb = unsafe {
                 assert!(!ptr.is_null());
                 &mut *ptr
@@ -395,9 +405,9 @@ macro_rules! with_clip {
             };
             $body
         }
-        #[no_mangle]
-        pub extern fn $namec(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
-                          $($arg : $argt),*) -> $result {
+        }
+        with_clip!{ fn $namec(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
+                             $($arg : $argt),*) -> $result {
             let $dlb = unsafe {
                 assert!(!ptr.is_null());
                 &mut *ptr
@@ -413,11 +423,11 @@ macro_rules! with_clip {
             };
             $body
         }
-        #[no_mangle]
-        pub extern fn $namecc(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
-                         ccx: f32, ccy: f32, ccw: f32, cch: f32,
-                         cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
-                         ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
+        }
+        with_clip!{ fn $namecc(ptr: *mut DisplayListBuilder, cx: f32, cy:f32, cw:f32, ch:f32,
+                              ccx: f32, ccy: f32, ccw: f32, cch: f32,
+                              cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
+                              ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
                          $($arg : $argt),*) -> $result {
             let $dlb = unsafe {
                 assert!(!ptr.is_null());
@@ -439,6 +449,78 @@ macro_rules! with_clip {
             };
             $body
         }
+        }
+        with_clip!{ fn $namet(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8,
+                             $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::from(rect),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: Some((tag1, tag2)),
+                }
+            };
+            $body
+        }
+        }
+        with_clip!{ fn $nametc(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8,
+                              cx: f32, cy:f32, cw:f32, ch:f32,
+                              $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::from(layout_rect(cx,cy,cw,ch)),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: Some((tag1, tag2)),
+                }
+            };
+            $body
+        }
+        }
+        with_clip!{ fn $nametcc(ptr: *mut DisplayListBuilder, tag1: u64, tag2: u8,
+                               cx: f32, cy:f32, cw:f32, ch:f32,
+                               ccx: f32, ccy: f32, ccw: f32, cch: f32,
+                               cctlw: f32, cctlh: f32, cctrw: f32, cctrh: f32,
+                               ccblw: f32, ccblh: f32, ccbrw: f32, ccbrh: f32,
+                               $($arg : $argt),*) -> $result {
+            let $dlb = unsafe {
+                assert!(!ptr.is_null());
+                &mut *ptr
+            };
+            let $primitive_info = |rect: LayoutRect| {
+                PrimitiveInfo {
+                    rect: rect,
+                    local_clip: LocalClip::RoundedRect(
+                        layout_rect(cx, cy, cw, ch),
+                        ComplexClipRegion::new(layout_rect(ccx, ccy, ccw, cch),
+                                               border_radius(cctlw, cctlh, cctrw, cctrh,
+                                                             ccblw, ccblh, ccbrw, ccbrh),
+                                               ClipMode::Clip)),
+                    edge_aa_segment_mask: EdgeAaSegmentMask::all(),
+                    is_backface_visible: true,
+                    tag: Some((tag1, tag2)),
+                }
+            };
+            $body
+        }
+        }
+    };
+    (fn None ($($arg:ident : $argt:ty),* )
+               -> $result:ty $body:block ) => { };
+    (fn $name:ident ($($arg:ident : $argt:ty),* )
+               -> $result:ty $body:block ) => {
+        #[no_mangle]
+        pub extern fn $name($($arg: $argt),*) -> $result $body
     }
 }
 
@@ -446,6 +528,9 @@ with_clip! {
     display_list_builder_push_rect,
     display_list_builder_push_rect_c,
     display_list_builder_push_rect_cc,
+    display_list_builder_push_rect_t,
+    display_list_builder_push_rect_tc,
+    display_list_builder_push_rect_tcc,
     fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32,
         r: f32, g: f32, b: f32, a: f32) -> () {
@@ -499,6 +584,9 @@ with_clip! {
     display_list_builder_push_border_n,
     display_list_builder_push_border_nc,
     display_list_builder_push_border_ncc,
+    display_list_builder_push_border_nt,
+    display_list_builder_push_border_ntc,
+    display_list_builder_push_border_ntcc,
     fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32,
         leftw: f32, topw: f32, rightw: f32, bottomw: f32,
@@ -617,6 +705,9 @@ with_clip! {
     display_list_builder_push_text,
     display_list_builder_push_text_c,
     display_list_builder_push_text_cc,
+    display_list_builder_push_text_t,
+    display_list_builder_push_text_tc,
+    display_list_builder_push_text_tcc,
     fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32, // box containing text
         font: *mut WRUIFont,
@@ -759,6 +850,9 @@ with_clip! {
     display_list_builder_push_shaped_text,
     display_list_builder_push_shaped_text_c,
     display_list_builder_push_shaped_text_cc,
+    display_list_builder_push_shaped_text_t,
+    display_list_builder_push_shaped_text_tc,
+    display_list_builder_push_shaped_text_tcc,
     fn (dlb, primitive_info,
         x: f32, y: f32, w: f32, h: f32, // box containing text
         r: f32, g: f32, b: f32, a: f32,
@@ -797,4 +891,82 @@ with_clip! {
                               ColorF::new(r,g,b,a),
                               None);
     }
+}
+
+// define scroll frame
+// push scroll frame ?
+fn optional_clip_id(pipeline: PipelineId, id: u64) -> Option<ClipId> {
+    if id == 0 {
+        None
+    } else if (id & 0x8000000000000000) != 0 {
+        Some(ClipId::Clip(id & 0x7fffffffffffffff, pipeline))
+    } else {
+        Some(ClipId::ClipExternalId(id, pipeline))
+    }
+}
+fn clip_id(pipeline: PipelineId, id: u64) -> ClipId {
+    if (id & 0x8000000000000000) != 0 {
+        ClipId::Clip(id & 0x7fffffffffffffff, pipeline)
+    } else {
+        ClipId::ClipExternalId(id, pipeline)
+    }
+}
+fn from_clip_id(id: ClipId) -> u64 {
+    match id {
+        ClipId::Clip(id, _) => id | 0x8000000000000000,
+        ClipId::ClipExternalId(id, _) => id,
+        ClipId::DynamicallyAddedNode(id, _) => panic!("Don't know what to do here!")
+    }
+}
+
+/// id should be the requested id of the frame, or zero for an
+/// automatically asigned one. the id passed should be greater than
+/// zero but have the most significant bit unset. The id assigned to
+/// the frame is returned. If scroll_with_scroll_events is true then
+/// the frame is sensitive to being scrolled by the mouse.
+with_clip! {
+    display_list_builder_define_scroll_frame,
+    display_list_builder_define_scroll_frame_c,
+    display_list_builder_define_scroll_frame_cc,
+    None, None, None,
+    fn (dlb, primitive_info, x: f32, y: f32, w: f32, h: f32, 
+        id: u64, scroll_with_scroll_events: i32) -> u64 {
+        let id = optional_clip_id(dlb.builder.pipeline_id, id);
+        let info = primitive_info(layout_rect(x,y,w,h));
+        
+        let clip = dlb.builder.define_scroll_frame(
+            id,
+            info.rect,
+            *info.local_clip.clip_rect(),
+            match info.local_clip {
+                LocalClip::Rect(_) => None,
+                LocalClip::RoundedRect(_,r) => Some(r),
+            },
+            None, // image mask
+            if scroll_with_scroll_events != 0 {
+                ScrollSensitivity::ScriptAndInputEvents
+            } else {
+                ScrollSensitivity::Script
+            });
+        from_clip_id(clip)
+    }
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_push_scroll_frame(dlb: *mut DisplayListBuilder, id: u64) -> () {
+    let dlb = unsafe {
+        assert!(!dlb.is_null());
+        &mut *dlb
+    };
+    let id = clip_id(dlb.builder.pipeline_id, id);
+    dlb.builder.push_clip_id(id);
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_pop_scroll_frame(dlb: *mut DisplayListBuilder) -> () {
+    let dlb = unsafe {
+        assert!(!dlb.is_null());
+        &mut *dlb
+    };
+    dlb.builder.pop_clip_id();
 }
