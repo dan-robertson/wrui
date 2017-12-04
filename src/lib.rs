@@ -58,7 +58,10 @@ use webrender_api::{DocumentId, PipelineId, RenderApi, GlyphInstance,
                     BorderWidths, BorderDetails, NormalBorder,
                     BorderSide, BorderRadius, PrimitiveInfo,
                     EdgeAaSegmentMask, LocalClip, ComplexClipRegion,
-                    ClipMode, ClipId, ScrollSensitivity};
+                    ClipMode, ClipId, ScrollSensitivity,
+                    LayoutVector2D, WorldPoint, ScrollLocation,
+                    ScrollEventPhase, ScrollPolicy, TransformStyle,
+                    MixBlendMode};
 
 // used as render notifier
 pub struct WRWindow {
@@ -179,12 +182,6 @@ pub extern fn wrui_new_window(title: *const c_char, width: uint32_t, height: uin
     };
 
     Box::into_raw(Box::new(win))
-/*
-    api.shut_down();
-    renderer.deinit();
-    window.hide();
-//    window.close(); // ??
-    */
 }
 
 #[no_mangle]
@@ -197,8 +194,6 @@ pub extern fn wrui_close_window(win: *mut WRUIWindow) -> () {
     win.window.hide();
     win.renderer.deinit();
 }
-
-// TODO: close/free window
 
 #[no_mangle]
 pub extern fn wrui_get_event_json(win: *mut WRUIWindow, block: i32) -> *mut c_char {
@@ -326,7 +321,7 @@ pub extern fn display_list_builder_build(window: *mut WRUIWindow, ptr: *mut Disp
                              Some(ColorF::new(1.0, 1.0, 1.0, 1.0)),
                              lsize,
                              dlb.builder.finalize(),
-                             false,
+                             true,
                              ResourceUpdates::new());
     win.api.generate_frame(win.document, None);
     win.renderer.update();
@@ -846,6 +841,49 @@ pub extern fn shaped_text_widths_free(info: *mut ShapedRunInfo, len: size_t) -> 
     }
 }
 
+/// Computes the character which extends beyond a certain distance.
+///
+/// first_part and last_part are zero-based indices for the slices of
+/// the text in natural order. Theses are the same slices whose widths
+/// are given by shaped_text_widths. The advance should be relative to
+/// the start of the first_part'th slice. The last_part'th slice is
+/// included in the range.
+///
+/// The function returns the byte index for character which advances
+/// over advance for the entire string that was passed to shape_text.
+///
+/// last_part may be larger than the number of slices (so -1 can be
+/// used for the end of the run)
+#[no_mangle]
+pub extern fn shaped_text_char_for_advance(text: *mut ShapedText, advance: f32, 
+                                           first_part: u64, last_part: u64) -> u64 {
+    let text = unsafe {
+        assert!(!text.is_null());
+        &*text // {run, range}
+    };
+    let mut i = 0;
+    let mut index = text::glyph::ByteIndex(0);
+    let mut remaining = Au::from_f32_px(advance);
+    for slice in text.run.natural_word_slices_in_visual_order(&text.range) {
+        if i >= first_part && i <= last_part {
+            let (slice_index, slice_advance) = 
+                slice.glyphs.range_index_of_advance(&slice.range, remaining, Au(0));
+            remaining -= slice_advance;
+            index = index + text::glyph::ByteIndex(slice_index as isize);
+            if remaining < Au(0) {
+                break;
+            }
+        } else {
+            index = index + slice.range.length();
+            if i > last_part {
+                break;
+            }
+        }
+        i = i + 1;
+    }
+    index.to_usize() as u64
+}
+
 with_clip! {
     display_list_builder_push_shaped_text,
     display_list_builder_push_shaped_text_c,
@@ -952,6 +990,35 @@ with_clip! {
     }
 }
 
+with_clip!{
+    display_list_builder_push_stacking_context,
+    display_list_builder_push_stacking_context_c,
+    display_list_builder_push_stacking_context_cc,
+    display_list_builder_push_stacking_context_t,
+    display_list_builder_push_stacking_context_tc,
+    display_list_builder_push_stacking_context_tcc,
+    fn (dlb, primitive_info, x: f32, y: f32, w: f32, h: f32) -> () {
+        dlb.builder.push_stacking_context(
+            &primitive_info(layout_rect(x,y,w,h)),
+            ScrollPolicy::Scrollable,
+            None,
+            TransformStyle::Flat,
+            None,
+            MixBlendMode::Normal,
+            Vec::new(),
+        );
+    }
+}
+
+#[no_mangle]
+pub extern fn display_list_builder_pop_stacking_context(dlb: *mut DisplayListBuilder) -> () {
+    let dlb = unsafe {
+        assert!(!dlb.is_null());
+        &mut *dlb
+    };
+    dlb.builder.pop_stacking_context();
+}
+
 #[no_mangle]
 pub extern fn display_list_builder_push_scroll_frame(dlb: *mut DisplayListBuilder, id: u64) -> () {
     let dlb = unsafe {
@@ -969,4 +1036,17 @@ pub extern fn display_list_builder_pop_scroll_frame(dlb: *mut DisplayListBuilder
         &mut *dlb
     };
     dlb.builder.pop_clip_id();
+}
+
+#[no_mangle]
+pub extern fn wrui_window_scroll(window: *mut WRUIWindow, mousex: f32, mousey: f32,
+                                 deltax: f32, deltay: f32) -> () {
+    let win = unsafe {
+        assert!(!window.is_null());
+        &mut *window
+    };
+    win.api.scroll(win.document, ScrollLocation::Delta(LayoutVector2D::new(deltax, deltay)),
+                   WorldPoint::new(mousex, mousey),
+                   ScrollEventPhase::Start);
+    
 }
