@@ -1,6 +1,6 @@
 [package]
 name = "wrui"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Dan Robertson <dan.robertson14@gmail.com>"]
 
 [lib]
@@ -13,53 +13,75 @@ gleam = "0.4"
 euclid = "0.15"
 app_units = "0.5"
 servo-glutin = "0.11"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
 
-webrender = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
+#webrender = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
 #should (/how do) we use ipc?
 #webrender_api = {git = "https://github.com/servo/webrender"}
-webrender_api = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
+#webrender_api = {git = "https://github.com/servo/webrender", rev="f33bde70fe49e96343a9df2bdb0b8107ffd65349"}
+webrender_api = {git = "https://github.com/servo/webrender"}
+webrender = {git = "https://github.com/servo/webrender"}
+
+# fork until font selection for linux gets merged
+gfx = {git = "https://github.com/dan-robertson/servo"}
+
+# need to get some dependencies with the right features.
+# TODO: keep checking that these are required
+style = {git = "https://github.com/dan-robertson/servo", features = ["servo"]}
+style_traits = {git = "https://github.com/dan-robertson/servo", features = ["servo"]}
+net_traits = {git = "https://github.com/dan-robertson/servo"}
+servo_arc = {git = "https://github.com/dan-robertson/servo"}
+range = {git = "https://github.com/dan-robertson/servo"}
+
+url = {version = "1.6", features = ["heapsize"]}
+ipc-channel = "0.9"
+unicode-bidi = {version = "0.3", features = ["with_serde"]}
+ordered-float = "0.4"
+unicode-script = {version = "0.1", features = ["harfbuzz"]}
+
 
 # for servo gfx (font handling) stuff
-string_cache="0.6"
-num-traits = "0.1"
-bitflags = "0.7"
+#string_cache="0.6"
+#num-traits = "0.1"
+#bitflags = "0.7"
 #fnv = "1.0"
 #fontsan = {git = "https://github.com/servo/fontsan"}
-harfbuzz-sys = "0.1"
-heapsize = "0.4"
-heapsize_derive = "0.1"
+#harfbuzz-sys = "0.1"
+#heapsize = "0.4"
+#heapsize_derive = "0.1"
 #ipc-channel = "0.8" #need this?
-lazy_static = "0.2"
-libc = "0.2"
-log = "0.3.5"
-ordered-float = "0.4"
-serde = "1.0"
-smallvec = "0.4"
-unicode-bidi = {version = "0.3", features = ["with_serde"]}
-unicode-script = {version = "0.1", features = ["harfbuzz"]}
-xi-unicode = "0.1.0"
+#lazy_static = "0.2"
+#libc = "0.2"
+#log = "0.3.5"
+#serde = "1.0"
+#smallvec = "0.4"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-byteorder = "1.0"
-core-foundation = "0.3"
-core-graphics = "0.8"
-core-text = "5.0"
 
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-freetype = "0.2"
+#xi-unicode = "0.1.0"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-servo-fontconfig = "0.2.1"
-
-[target.'cfg(target_os = "android")'.dependencies]
-xml5ever = {version = "0.8", features = ["unstable"]}
-
-[target.'cfg(any(target_feature = "sse2", target_feature = "neon"))'.dependencies]
-simd = "0.2.0"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-dwrote = "0.4"
-truetype = "0.26"
+#[target.'cfg(target_os = "macos")'.dependencies]
+#byteorder = "1.0"
+#core-foundation = "0.3"
+#core-graphics = "0.8"
+#core-text = "5.0"
+#
+#[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+#freetype = "0.2"
+#
+#[target.'cfg(target_os = "linux")'.dependencies]
+#servo-fontconfig = "0.2.1"
+#
+#[target.'cfg(target_os = "android")'.dependencies]
+#xml5ever = {version = "0.8", features = ["unstable"]}
+#
+#[target.'cfg(any(target_feature = "sse2", target_feature = "neon"))'.dependencies]
+#simd = "0.2.0"
+#
+#[target.'cfg(target_os = "windows")'.dependencies]
+#dwrote = "0.4"
+#truetype = "0.26"
 
 [[bin]]
 name = "main"
