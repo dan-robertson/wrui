@@ -61,7 +61,7 @@ use webrender_api::{DocumentId, PipelineId, RenderApi, GlyphInstance,
                     ClipMode, ClipId, ScrollSensitivity,
                     LayoutVector2D, WorldPoint, ScrollLocation,
                     ScrollEventPhase, ScrollPolicy, TransformStyle,
-                    MixBlendMode};
+                    MixBlendMode, HitTestFlags};
 
 // used as render notifier
 pub struct WRWindow {
@@ -1049,4 +1049,39 @@ pub extern fn wrui_window_scroll(window: *mut WRUIWindow, mousex: f32, mousey: f
                    WorldPoint::new(mousex, mousey),
                    ScrollEventPhase::Start);
     
+}
+
+/// Tests to get the tag for a point in the window. Returns 1 if some
+/// tagged element was found. 0 otherwise If a tagged item is found,
+/// its tag is written to the two pointers. relativex and relativey
+/// are set to the coordinates of the hit in the frame relative to the
+/// item which was hit. relativex and relativey may be null.
+#[no_mangle]
+pub extern fn wrui_window_hit_test(window: *mut WRUIWindow, mousex: f32, mousey: f32,
+                                   tag1: *mut u64, tag2: *mut u8,
+                                   relativex: *mut f32, relativey: *mut f32) -> i32 {
+    let win = unsafe {
+        assert!(!window.is_null());
+        assert!(!tag1.is_null());
+        assert!(!tag2.is_null());
+        &mut *window
+    };
+    let result = win.api.hit_test(win.document, None,
+                                  WorldPoint::new(mousex, mousey),
+                                  HitTestFlags::empty());
+    if result.items.len() == 1 {
+        let item = &result.items[0];
+        let pt = item.point_relative_to_item;
+        if !relativex.is_null() { unsafe { *relativex = pt.x; } }
+        if !relativey.is_null() { unsafe { *relativey = pt.y; } }
+        unsafe {
+            *tag1 = item.tag.0;
+            *tag2 = item.tag.1;
+        }
+        1
+    } else if result.items.len() > 1 {
+        panic!("Too many results: {}", result.items.len());
+    } else {
+        0
+    }
 }
