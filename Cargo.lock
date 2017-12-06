@@ -1837,7 +1837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "wrui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "app_units 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "euclid 0.15.5 (registry+https://github.com/rust-lang/crates.io-index)",
